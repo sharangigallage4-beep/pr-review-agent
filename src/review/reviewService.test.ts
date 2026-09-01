@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { reviewPullRequest } from './reviewService.js';
+import { reviewPullRequest, normalizeRawReviewResult } from './reviewService.js';
 import type { ReviewInput } from './types.js';
 
 // No ANTHROPIC_API_KEY, no network, no GitHub - every test injects a fake requestReview and
@@ -100,5 +100,68 @@ describe('reviewPullRequest', () => {
       () => reviewPullRequest(sampleInput, { requestReview: async () => 'not json' }),
       /did not match the expected schema/
     );
+  });
+
+  test('accepts issues sent as a JSON-encoded string instead of a native array (observed live)', async () => {
+    const result = await reviewPullRequest(sampleInput, {
+      requestReview: async () => ({
+        summary: 'One issue, but issues came back as a string.',
+        issues: JSON.stringify([
+          { severity: 'medium', file: 'src/checkout.ts', line: 3, title: 't', explanation: 'e', suggestedFix: 'f' },
+        ]),
+      }),
+    });
+    assert.equal(result.issues.length, 1);
+    assert.equal(result.issues[0].file, 'src/checkout.ts');
+  });
+
+  test('retries once and succeeds when the first response is malformed but the second is valid', async () => {
+    let calls = 0;
+    const result = await reviewPullRequest(sampleInput, {
+      requestReview: async () => {
+        calls += 1;
+        if (calls === 1) return { issues: [] }; // missing "summary"
+        return { summary: 'ok on retry', issues: [] };
+      },
+    });
+    assert.equal(calls, 2);
+    assert.equal(result.summary, 'ok on retry');
+  });
+
+  test('gives up and throws when both the original attempt and the retry are malformed', async () => {
+    let calls = 0;
+    await assert.rejects(
+      () =>
+        reviewPullRequest(sampleInput, {
+          requestReview: async () => {
+            calls += 1;
+            return { issues: [] }; // missing "summary" every time
+          },
+        }),
+      /did not match the expected schema/
+    );
+    assert.equal(calls, 2);
+  });
+});
+
+describe('normalizeRawReviewResult', () => {
+  test('parses a JSON-string "issues" field into an array', () => {
+    const result = normalizeRawReviewResult({ summary: 's', issues: '[{"a":1}]' });
+    assert.deepEqual(result, { summary: 's', issues: [{ a: 1 }] });
+  });
+
+  test('leaves a non-JSON "issues" string untouched so schema validation reports it', () => {
+    const raw = { summary: 's', issues: 'not json' };
+    assert.deepEqual(normalizeRawReviewResult(raw), raw);
+  });
+
+  test('leaves non-object input untouched', () => {
+    assert.equal(normalizeRawReviewResult('plain text'), 'plain text');
+    assert.equal(normalizeRawReviewResult(null), null);
+  });
+
+  test('leaves a well-formed array "issues" field untouched', () => {
+    const raw = { summary: 's', issues: [{ a: 1 }] };
+    assert.deepEqual(normalizeRawReviewResult(raw), raw);
   });
 });
