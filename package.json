@@ -1,0 +1,37 @@
+{
+  "name": "pr-review-mcp-server",
+  "version": "0.1.0",
+  "description": "MCP server exposing GitHub pull-request tools (metadata, diff, changed files, file content, review comments) for the pr-review-agent Claude-based PR reviewer.",
+  "type": "module",
+  "main": "dist/mcp/server.js",
+  "bin": {
+    "pr-review-mcp-server": "dist/mcp/server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/mcp/server.js",
+    "dev": "tsx src/mcp/server.ts",
+    "review": "tsx src/cli/review.ts",
+    "auto-review": "tsx src/cli/autoReview.ts",
+    "webhook": "tsx src/webhook/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test src/**/*.test.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.122.0",
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "@octokit/rest": "^21.0.2",
+    "@octokit/request-error": "^6.1.5",
+    "express": "^5.2.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^20.14.10",
+    "tsx": "^4.16.2",
+    "typescript": "^5.5.4"
+  }
+}

