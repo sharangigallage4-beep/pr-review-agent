@@ -81,12 +81,28 @@ export async function requestReview(
 
   const response = await client.messages.create({
     model: resolvedModel,
-    max_tokens: maxTokens ?? 8000,
+    // 8000 was too low for real-world PRs: a large diff (many files, many genuine findings, each
+    // needing an explanation and a suggested fix) can need more room than that to complete the
+    // submit_review tool call, and a response cut off mid-call by the max_tokens cap produces
+    // truncated/invalid JSON - which then fails schema validation with a confusing "missing
+    // required field" error that looks unrelated to its real cause. Confirmed live: a 20-file,
+    // ~77KB diff hit exactly this on 2026-09-03. 16000 is the documented safe default for a
+    // non-streaming request (stays comfortably under SDK HTTP timeouts).
+    max_tokens: maxTokens ?? 16000,
     system: systemPrompt,
     messages: [{ role: 'user', content: userMessage }],
     tools: [buildReviewTool()],
     tool_choice: { type: 'tool', name: REVIEW_TOOL_NAME },
   });
+
+  // Fail fast with a clear, specific diagnosis rather than letting a truncated tool call fall
+  // through to a generic "missing required field" schema error downstream - stop_reason tells us
+  // definitively that this was a token-budget cutoff, not a genuine model mistake.
+  if (response.stop_reason === 'max_tokens') {
+    throw new Error(
+      `Claude's response was cut off by the max_tokens limit (${maxTokens ?? 16000}) before finishing the ${REVIEW_TOOL_NAME} tool call - the diff or the number of findings was too large for the configured budget.`
+    );
+  }
 
   const toolUse = response.content.find(
     (block): block is Anthropic.ToolUseBlock => block.type === 'tool_use' && block.name === REVIEW_TOOL_NAME
