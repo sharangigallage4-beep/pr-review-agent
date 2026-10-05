@@ -109,8 +109,50 @@ export async function requestReview(
   );
 
   if (!toolUse) {
+    // Small local models (e.g. via Ollama) often emit the tool call as plain JSON text instead of a
+    // real tool_use block. Accept that shape so they remain usable.
+    const fallback = parseTextToolCall(response.content);
+    if (fallback !== undefined) return fallback;
     throw new Error(`Claude did not return a ${REVIEW_TOOL_NAME} tool call.`);
   }
 
   return toolUse.input;
+}
+
+/**
+ * Extracts the submit_review input from text like `{"name":"submit_review","arguments":{...}}`
+ * (optionally wrapped in a ```json fence or surrounding prose). Returns undefined if none found.
+ */
+export function parseTextToolCall(content: Anthropic.ContentBlock[]): unknown {
+  const text = content
+    .filter((block): block is Anthropic.TextBlock => block.type === 'text')
+    .map((block) => block.text)
+    .join('\n');
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end <= start) return undefined;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return undefined;
+
+  const obj = parsed as Record<string, unknown>;
+  if (obj.name === REVIEW_TOOL_NAME) {
+    const args = obj.arguments ?? obj.input ?? obj.parameters;
+    return typeof args === 'string' ? safeParse(args) : args;
+  }
+  // Model returned the bare arguments object with no wrapper.
+  return 'summary' in obj || 'findings' in obj ? obj : undefined;
+}
+
+function safeParse(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
 }
