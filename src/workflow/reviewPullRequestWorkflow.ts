@@ -3,6 +3,7 @@ import {
   getPullRequest as githubGetPullRequest,
   getChangedFiles as githubGetChangedFiles,
   getPullRequestDiff as githubGetPullRequestDiff,
+  getFileContent as githubGetFileContent,
   getExistingReviewComments as githubGetExistingReviewComments,
   createPullRequestReview as githubCreatePullRequestReview,
 } from '../github/prService.js';
@@ -14,6 +15,7 @@ import { mapLineToDiffPosition } from './diffMapper.js';
 import { formatIssueCommentBody } from './fingerprint.js';
 import type { RepositoryPullRequestRef } from './fingerprint.js';
 import { detectDuplicateFindings } from './duplicateDetectionService.js';
+import { findSyntaxErrors as defaultFindSyntaxErrors, isSyntaxCheckable } from './syntaxCheck.js';
 import { consoleLogger, toSafeLogFields } from './logger.js';
 import type { WorkflowLogger } from './logger.js';
 
@@ -61,6 +63,9 @@ export interface ReviewPullRequestDeps {
   getExistingReviewComments: typeof githubGetExistingReviewComments;
   createPullRequestReview: typeof githubCreatePullRequestReview;
   runClaudeReview: typeof runClaudeReview;
+  /** Used to fetch each changed JavaScript file at the PR's head commit for the deterministic syntax check. */
+  getFileContent: typeof githubGetFileContent;
+  findSyntaxErrors: typeof defaultFindSyntaxErrors;
   /** The bot's own login for dedup filtering - defaults to PR_REVIEW_BOT_LOGIN via loadConfig(). */
   knownBotLogin?: string;
   /**
@@ -96,6 +101,8 @@ function defaultDeps(): ReviewPullRequestDeps {
     getExistingReviewComments: githubGetExistingReviewComments,
     createPullRequestReview: githubCreatePullRequestReview,
     runClaudeReview,
+    getFileContent: githubGetFileContent,
+    findSyntaxErrors: defaultFindSyntaxErrors,
     knownBotLogin: resolveDefaultBotLogin(),
     confirmBeforePosting: () => true,
     logger: consoleLogger,
@@ -194,6 +201,16 @@ export async function reviewPullRequest(
       const safe = toSafeLogFields(err);
       log.error('Claude review failed - aborting, nothing will be posted', safe);
       return { status: 'failed', stage: 'claude', reason: safe.message };
+    }
+
+    // Deterministic syntax check (node --check) on changed JavaScript files, merged in as critical
+    // findings. Best effort: any failure fetching a file is logged and skipped, never fatal.
+    const syntaxIssues = await collectSyntaxIssues(deps, ref, pr.head.sha, reviewableFiles, log);
+    if (syntaxIssues.length > 0) {
+      log.info(`Syntax check found ${syntaxIssues.length} file(s) that do not parse`, {
+        files: syntaxIssues.map((i) => i.file),
+      });
+      claudeResult = { ...claudeResult, issues: [...syntaxIssues, ...claudeResult.issues] };
     }
 
     // --- 9: map + validate every finding against the actual diff-line-mapping system ---
@@ -307,6 +324,39 @@ export async function reviewPullRequest(
     const safe = toSafeLogFields(err);
     log.error('Unexpected error in the review workflow - aborting, nothing will be posted', safe);
     return { status: 'failed', stage: 'unexpected', reason: safe.message };
+  }
+}
+
+const MAX_SYNTAX_CHECK_FILES = 20;
+
+async function collectSyntaxIssues(
+  deps: ReviewPullRequestDeps,
+  ref: { owner: string; repo: string },
+  headSha: string,
+  files: ChangedFile[],
+  log: WorkflowLogger
+): Promise<ReviewIssue[]> {
+  const candidates = files
+    .filter((f) => f.status !== 'removed' && isSyntaxCheckable(f.filename))
+    .slice(0, MAX_SYNTAX_CHECK_FILES);
+
+  const sources: { filename: string; content: string }[] = [];
+  for (const file of candidates) {
+    try {
+      const result = await deps.getFileContent({ owner: ref.owner, repo: ref.repo, path: file.filename, ref: headSha });
+      if ('content' in result && typeof result.content === 'string') {
+        sources.push({ filename: file.filename, content: result.content });
+      }
+    } catch (err) {
+      log.warn(`Could not fetch ${file.filename} for the syntax check - skipping it`, toSafeLogFields(err));
+    }
+  }
+
+  try {
+    return deps.findSyntaxErrors(sources);
+  } catch (err) {
+    log.warn('Syntax check failed unexpectedly - continuing without it', toSafeLogFields(err));
+    return [];
   }
 }
 

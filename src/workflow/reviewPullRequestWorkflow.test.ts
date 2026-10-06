@@ -83,6 +83,10 @@ function baseDeps(overrides: Partial<ReviewPullRequestDeps> = {}): Partial<Revie
         },
       ],
     }),
+    getFileContent: async () => {
+      throw new Error('getFileContent not stubbed');
+    },
+    findSyntaxErrors: () => [],
     knownBotLogin: 'pr-review-bot',
     logger: silentLogger,
     ...overrides,
@@ -673,5 +677,52 @@ describe('reviewPullRequest duplicate-review protection across multiple reviews'
       assert.equal(run2.newCommentCount, 0);
       assert.equal(run2.totalFindings, 0);
     }
+  });
+});
+
+describe('reviewPullRequest syntax check', () => {
+  test('merges a syntax finding for a changed .js file into the review', async () => {
+    const jsFile = { ...reviewableFile, filename: 'src/config.js' };
+    const outcome = await reviewPullRequest(
+      'acme',
+      'widgets',
+      42,
+      baseDeps({
+        getChangedFiles: async ({ page, perPage }) => changedFilesPage([jsFile], 1, page ?? 1, perPage ?? 100),
+        getFileContent: async () => ({ path: 'src/config.js', ref: 'sha', sha: 's', size: 1, content: 'broken(' }),
+        findSyntaxErrors: (files) => {
+          assert.deepEqual(files.map((f) => f.filename), ['src/config.js']);
+          return [
+            {
+              severity: 'critical' as const,
+              file: 'src/config.js',
+              line: 1,
+              title: 'Syntax error',
+              explanation: 'The JavaScript parser rejects this file.',
+              suggestedFix: 'Close the bracket.',
+            },
+          ];
+        },
+        runClaudeReview: async () => ({ summary: 'ok', issues: [] }),
+      })
+    );
+    assert.equal(outcome.status === 'posted' ? outcome.totalFindings : -1, 1);
+  });
+
+  test('a file that cannot be fetched is skipped without failing the review', async () => {
+    const jsFile = { ...reviewableFile, filename: 'src/config.js' };
+    const outcome = await reviewPullRequest(
+      'acme',
+      'widgets',
+      42,
+      baseDeps({
+        getChangedFiles: async ({ page, perPage }) => changedFilesPage([jsFile], 1, page ?? 1, perPage ?? 100),
+        getFileContent: async () => {
+          throw new Error('404');
+        },
+        runClaudeReview: async () => ({ summary: 'ok', issues: [] }),
+      })
+    );
+    assert.notEqual(outcome.status, 'failed');
   });
 });
