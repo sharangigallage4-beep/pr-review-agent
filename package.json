@@ -16,6 +16,7 @@
     "dev": "tsx src/mcp/server.ts",
     "review": "tsx src/cli/review.ts",
     "auto-review": "tsx src/cli/autoReview.ts",
+    "watch": "tsx src/cli/watch.ts",
     "webhook": "tsx src/webhook/server.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test src/**/*.test.ts"
