@@ -1,3 +1,4 @@
+import { loadConventions } from './conventions.js';
 import { buildSystemPrompt, buildUserMessage } from './prompt.js';
 import { requestReview as defaultRequestReview } from './claudeClient.js';
 import { reviewResultSchema } from './types.js';
@@ -6,6 +7,8 @@ import type { ReviewInput, ReviewResult } from './types.js';
 export interface ReviewServiceDeps {
   /** Injectable for tests - defaults to the real Claude API call in claudeClient.ts. */
   requestReview?: (params: { systemPrompt: string; userMessage: string }) => Promise<unknown>;
+  /** Team coding conventions text. Defaults to the .md files in docs/conventions; pass '' to disable. */
+  conventions?: string;
 }
 
 /**
@@ -37,7 +40,7 @@ export function normalizeRawReviewResult(raw: unknown): unknown {
  * independent of GitHub API calls or the MCP transport.
  */
 export async function reviewPullRequest(input: ReviewInput, deps: ReviewServiceDeps = {}): Promise<ReviewResult> {
-  const systemPrompt = buildSystemPrompt();
+  const systemPrompt = buildSystemPrompt(deps.conventions ?? loadConventions());
   const userMessage = buildUserMessage(input);
   const requestReview = deps.requestReview ?? defaultRequestReview;
 
