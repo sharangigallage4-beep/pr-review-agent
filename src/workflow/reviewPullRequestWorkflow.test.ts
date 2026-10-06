@@ -682,6 +682,7 @@ describe('reviewPullRequest duplicate-review protection across multiple reviews'
 
 describe('reviewPullRequest syntax check', () => {
   test('merges a syntax finding for a changed .js file into the review', async () => {
+    let createdBody: string | undefined;
     const jsFile = { ...reviewableFile, filename: 'src/config.js' };
     const outcome = await reviewPullRequest(
       'acme',
@@ -703,10 +704,16 @@ describe('reviewPullRequest syntax check', () => {
             },
           ];
         },
-        runClaudeReview: async () => ({ summary: 'ok', issues: [] }),
+        runClaudeReview: async () => ({ summary: 'No issues found - the change looks correct.', issues: [] }),
+        createPullRequestReview: async ({ body }) => {
+          createdBody = body;
+          return { id: 1, url: 'u', state: 'COMMENTED', submitted_at: 't', comments_count: 0 };
+        },
       })
     );
     assert.equal(outcome.status === 'posted' ? outcome.totalFindings : -1, 1);
+    assert.match(String(createdBody), /Syntax check: 1 changed file\(s\) do not parse \(src\/config\.js\)/);
+    assert.equal(String(createdBody).includes('looks correct'), false);
   });
 
   test('a file that cannot be fetched is skipped without failing the review', async () => {

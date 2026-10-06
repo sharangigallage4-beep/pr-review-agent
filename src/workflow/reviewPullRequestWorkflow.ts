@@ -210,7 +210,16 @@ export async function reviewPullRequest(
       log.info(`Syntax check found ${syntaxIssues.length} file(s) that do not parse`, {
         files: syntaxIssues.map((i) => i.file),
       });
-      claudeResult = { ...claudeResult, issues: [...syntaxIssues, ...claudeResult.issues] };
+      // The model never saw these findings, so its own summary can contradict them (e.g. "No
+      // issues found") - lead with the syntax result, and drop the model's summary entirely when
+      // it found nothing else to say.
+      const syntaxNote = `Syntax check: ${syntaxIssues.length} changed file(s) do not parse (${syntaxIssues
+        .map((i) => i.file)
+        .join(', ')}).`;
+      claudeResult = {
+        summary: claudeResult.issues.length === 0 ? syntaxNote : `${syntaxNote} ${claudeResult.summary}`,
+        issues: [...syntaxIssues, ...claudeResult.issues],
+      };
     }
 
     // --- 9: map + validate every finding against the actual diff-line-mapping system ---
