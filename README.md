@@ -611,6 +611,80 @@ every missing variable, rather than failing on the first:
 | `ANTHROPIC_MODEL` | `src/review/config.ts` (optional) | Overrides the default review model. |
 | `GITHUB_WEBHOOK_SECRET` | `src/webhook/config.ts` (`loadWebhookConfig`) | Shared secret configured on the GitHub webhook itself - every request is HMAC-verified against it. Only required to run `npm run webhook`. |
 | `PORT` | `src/webhook/config.ts` (optional) | Port the webhook server listens on. Defaults to 4300. |
+| `ANTHROPIC_BASE_URL` | the Anthropic SDK (read from the environment) | Point the review at another server, e.g. a local Ollama at `http://localhost:11434`. See "Running on a local model". |
+| `PR_REVIEW_CONVENTIONS_DIR` | `src/review/conventions.ts` (optional) | Folder of rule documents. Defaults to `docs/conventions`. |
+| `PR_REVIEW_UI_PORT` / `PR_REVIEW_UI_HOST` | `src/ui/server.ts` (optional) | Web UI port (default 4500) and bind address (default `127.0.0.1`). |
+| `PR_REVIEW_UI_PASSWORD` | `src/ui/server.ts` (optional) | Turns on the login page. **Required** whenever the host is not loopback - the server refuses to start without it. |
+| `PR_REVIEW_UI_ALLOWED_HOSTS` / `PR_REVIEW_UI_COOKIE_SECURE` | `src/ui/server.ts` (optional) | Extra `Host` names to accept when shared on a network, and the `Secure` cookie flag for HTTPS. |
+| `PR_REVIEW_DATA_DIR` | `src/ui/server.ts` (optional) | Where the UI keeps its review history and auto-review state (default: the project folder). |
+
+## Running on a local model (Ollama), the web UI, and team rules
+
+Everything below is optional and works with no Claude API key.
+
+### Local model with Ollama
+
+1. Install [Ollama](https://ollama.com) and pull a model that supports tool calling, e.g.
+   `ollama pull qwen2.5-coder:7b`.
+2. Ollama's default context window (4096 tokens) is too small for the review prompt plus rules, and
+   an over-long prompt is silently truncated. Make a variant with a bigger window:
+   ```
+   # Modelfile
+   FROM qwen2.5-coder:7b
+   PARAMETER num_ctx 16384
+   PARAMETER temperature 0.1
+   ```
+   `ollama create qwen2.5-coder-16k -f Modelfile`
+3. In `.env`:
+   ```
+   ANTHROPIC_BASE_URL=http://localhost:11434
+   ANTHROPIC_API_KEY=ollama            # any non-empty value; Ollama ignores it
+   ANTHROPIC_MODEL=qwen2.5-coder-16k
+   ```
+
+Small local models often write the `submit_review` tool call out as plain JSON text instead of a real
+tool call. `parseTextToolCall` (`src/review/claudeClient.ts`) accepts that shape. Expect a 7B model
+to be slower and less thorough than Claude; the deterministic checks below cover what it misses.
+
+### Team rules (`docs/conventions/*.md`)
+
+Every `.md` file in `docs/conventions/` is added to the review prompt, so the model checks the diff
+against your written rules and cites the rule number. Start a file with
+`<!-- applies-to: .projection, .client -->` to load it only when the PR changes files with those
+extensions (keeps the prompt small). Rules are read from the reviewer's own checkout, never from
+the PR being reviewed. Included: `nodejs-typescript.md` and three IFS Cloud documents
+(`ifs-comments.md`, `ifs-naming.md`, `ifs-customization-best-practices.md`). They can be edited from
+the web UI.
+
+### Deterministic checks (no model involved)
+
+A small model misses things a program can verify exactly, so these run on every review and are
+merged ahead of the model's findings (`src/workflow/syntaxCheck.ts`, `src/workflow/ifsCheck.ts`):
+
+- **Syntax:** `node --check` on changed `.js/.mjs/.cjs` files (the file is parsed, never executed).
+- **IFS Cloud rules:** file names (`-Cust` / `C` prefix), comment-tag format and start/finish
+  pairing, `//` vs `--`, untagged edits, `@Overtake`, header comments, and declaration naming.
+  Declaration checks are line-by-line pattern matches, so they are `low` severity.
+
+### Web UI (`npm run ui`)
+
+Open <http://127.0.0.1:4500>: pick a repository, press **Review** on a pull request, read the
+findings, then **Post to GitHub** or **Discard** (the posted findings are exactly the ones shown -
+the review is not re-run). It also has an **auto-review** switch (watches the repository and reviews
+new PRs/commits), 👍/👎 on each finding with a running accuracy figure, a **Review rules** editor,
+and a history that survives restarts (`.review-history.json`).
+
+The server can post with your GitHub token, so it listens on `127.0.0.1` only, rejects foreign
+`Host`/`Origin` headers and non-JSON writes, and **will not start on any other address without
+`PR_REVIEW_UI_PASSWORD`**. The login is a single shared password (HttpOnly, SameSite=Strict cookie,
+throttled attempts); it is not per-user. Serve it over HTTPS if you share it.
+
+- **Start with Windows:** `powershell -ExecutionPolicy Bypass -File scripts\windows\install-autostart.ps1`
+  (current user only; add `-Remove` to undo). Ollama's own installer already starts Ollama at login.
+- **Docker:** `docker compose up -d --build` (needs `PR_REVIEW_UI_PASSWORD` in `.env`; reaches Ollama on
+  the host via `host.docker.internal`). Not yet built or run by the author - treat it as a starting point.
+- **Without the UI:** `npm run review -- --owner=O --repo=R --pr=N` (asks before posting) or
+  `npm run watch` (reviews new PRs automatically and posts without asking).
 
 `src/review/config.ts` never reads or requires `GITHUB_*`, `src/config.ts` never reads or
 requires `ANTHROPIC_*` or `GITHUB_WEBHOOK_SECRET`, and `src/webhook/config.ts` never reads or

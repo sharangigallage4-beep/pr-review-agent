@@ -45,7 +45,10 @@ function main(): void {
 
   const here = path.dirname(fileURLToPath(import.meta.url));
   const root = path.join(here, '..', '..');
-  const jobs = new JobManager({ historyFile: path.join(root, '.review-history.json') });
+  // Where the review history and auto-review state are kept. Defaults to the project folder; a
+  // container sets PR_REVIEW_DATA_DIR to a mounted volume so they survive the container being replaced.
+  const dataDir = process.env.PR_REVIEW_DATA_DIR || root;
+  const jobs = new JobManager({ historyFile: path.join(dataDir, '.review-history.json') });
   const listPullRequests = (owner: string, repo: string) => listOpenPullRequests(owner, repo, token);
 
   const app = buildUiApp({
@@ -55,7 +58,7 @@ function main(): void {
     publicDir: path.join(here, 'public'),
     allowedHosts,
     auth: password ? createAuth({ password, cookieSecure: process.env.PR_REVIEW_UI_COOKIE_SECURE === 'true' }) : undefined,
-    auto: new AutoReviewer({ jobs, listPullRequests, stateFile: path.join(root, '.ui-auto-state.json') }),
+    auto: new AutoReviewer({ jobs, listPullRequests, stateFile: path.join(dataDir, '.ui-auto-state.json') }),
     conventionsDir: process.env.PR_REVIEW_CONVENTIONS_DIR || defaultConventionsDir(),
   });
 

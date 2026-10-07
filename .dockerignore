@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+.env
+.env.*
+!.env.example
+*.log
+*.tmp
+.review-history.json
+.ui-auto-state.json
+.watch-state.json
