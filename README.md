@@ -672,7 +672,10 @@ Open <http://127.0.0.1:4500>: pick a repository, press **Review** on a pull requ
 findings, then **Post to GitHub** or **Discard** (the posted findings are exactly the ones shown -
 the review is not re-run). It also has an **auto-review** switch (watches the repository and reviews
 new PRs/commits), 👍/👎 on each finding with a running accuracy figure, a **Review rules** editor,
-and a history that survives restarts (`.review-history.json`).
+and a history that survives restarts (`.review-history.json`). Also: an overview (reviews run,
+findings, posted, the rules broken most often), a filter and a "not reviewed yet" view of the PR
+list with a **Review all not yet reviewed** button (reviews still run one at a time), elapsed time
+on a running review, **Copy as Markdown** for a review's findings, and a light/dark/auto theme.
 
 The server can post with your GitHub token, so it listens on `127.0.0.1` only, rejects foreign
 `Host`/`Origin` headers and non-JSON writes, and **will not start on any other address without

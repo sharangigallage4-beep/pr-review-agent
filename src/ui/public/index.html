@@ -16,8 +16,17 @@
     --shadow-lift: 0 2px 4px rgba(23, 32, 51, .06), 0 10px 28px rgba(23, 32, 51, .10);
     --radius: 14px; --on-sev: #ffffff;
   }
+  /* Theme: follows the system unless the user picks one (data-theme on <html>). */
+  :root[data-theme="dark"] {
+      --bg: #0e1320; --surface: #161d2e; --surface-2: #1b2438; --text: #e8ecf5; --muted: #93a1ba; --border: #263148;
+      --accent: #7c93ff; --accent-hover: #93a6ff; --accent-soft: #1d2745; --accent-text: #0b1020;
+      --ok: #4cc38a; --warn: #e5ac52; --bad: #ff8076; --idle: #7a879c;
+      --crit: #ff8076; --high: #ff9d62; --med: #e5bd52; --low: #82b3e6;
+      --banner: linear-gradient(135deg, #1d2b66 0%, #3b2a7a 100%);
+      --shadow: none; --shadow-lift: 0 8px 28px rgba(0, 0, 0, .35); --on-sev: #1a1016;
+  }
   @media (prefers-color-scheme: dark) {
-    :root {
+    :root:not([data-theme="light"]) {
       --bg: #0e1320; --surface: #161d2e; --surface-2: #1b2438; --text: #e8ecf5; --muted: #93a1ba; --border: #263148;
       --accent: #7c93ff; --accent-hover: #93a6ff; --accent-soft: #1d2745; --accent-text: #0b1020;
       --ok: #4cc38a; --warn: #e5ac52; --bad: #ff8076; --idle: #7a879c;
@@ -140,6 +149,15 @@
   textarea { width: 100%; min-height: 280px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--text); font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; resize: vertical; }
   textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   #login { max-width: 420px; margin: 40px auto 0; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-top: 16px; }
+  .stat { padding: 12px 16px; }
+  .stat .big { font-size: 26px; font-weight: 700; line-height: 1.15; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .stat .label { font-size: 12.5px; color: var(--muted); }
+  .stat.wide { grid-column: 1 / -1; }
+  .stat .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+  .toolbar input[type=text] { flex: 1 1 220px; }
+  select { padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--text); font: inherit; }
   .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 10px; box-shadow: var(--shadow-lift); font-size: 14px; max-width: calc(100vw - 32px); z-index: 10; }
   @media (max-width: 560px) { .banner { padding-bottom: 56px; } .row-actions { width: 100%; } }
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
@@ -181,7 +199,19 @@
     <div class="switch-row"><label class="check" style="margin:0"><input type="checkbox" id="autoreview"> Auto-review new pull requests and new commits</label><span id="autostatus"></span></div>
   </section>
 
+  <section class="stats" id="stats" hidden aria-label="Overview"></section>
+
   <div class="section-head"><h2>Open pull requests</h2><span class="count" id="prcount"></span></div>
+  <div class="toolbar">
+    <input type="text" id="filter" placeholder="Filter by title, branch, author or #number" aria-label="Filter pull requests" autocomplete="off">
+    <select id="statusfilter" aria-label="Show">
+      <option value="all">All</option>
+      <option value="new">Not reviewed yet</option>
+      <option value="decision">Needs my decision</option>
+      <option value="failed">Failed</option>
+    </select>
+    <button id="bulk" hidden></button>
+  </div>
   <div class="list" id="prs"></div>
 
   <section class="card pad panel" id="panel" hidden aria-live="polite"></section>
@@ -259,6 +289,19 @@
     set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage unavailable */ } }
   };
 
+  // ---- theme: auto (follow the system) -> light -> dark
+  var THEMES = ['auto', 'light', 'dark'];
+  var theme = THEMES.indexOf(store.get('theme')) >= 0 ? store.get('theme') : 'auto';
+  function applyTheme() {
+    if (theme === 'auto') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', theme);
+  }
+  function cycleTheme() {
+    theme = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+    store.set('theme', theme); applyTheme(); refreshStatus();
+  }
+  applyTheme();
+
   function avatar(name) {
     var label = name || '?', hash = 0;
     for (var i = 0; i < label.length; i++) hash = (hash * 31 + label.charCodeAt(i)) % 360;
@@ -287,6 +330,7 @@
     chips.appendChild(el('span', { class: 'chip', title: m.baseUrl || '' }, el('span', { class: 'dot ' + cls }), label));
     chips.appendChild(el('span', { class: 'chip' }, el('span', { class: 'dot ' + (s.github.configured ? 'ok' : 'bad') }),
       s.github.configured ? 'GitHub connected' : 'GitHub token missing'));
+    chips.appendChild(el('button', { class: 'chip', style: 'cursor:pointer', title: 'Switch between automatic, light and dark', text: 'Theme: ' + theme, on: { click: cycleTheme } }));
     if (state.authRequired) chips.appendChild(el('button', { class: 'chip', style: 'cursor:pointer', text: 'Sign out', on: { click: signOut } }));
   }
   function refreshStatus() {
@@ -303,13 +347,96 @@
     }
     return null;
   }
+  function visiblePrs() {
+    var text = $('filter').value.trim().toLowerCase().replace(/^#/, '');
+    var mode = $('statusfilter').value;
+    return state.prs.filter(function (pr) {
+      var job = latestJobFor(pr.number);
+      if (mode === 'new' && job) return false;
+      if (mode === 'decision' && !(job && job.status === 'awaiting_confirmation')) return false;
+      if (mode === 'failed' && !(job && job.status === 'failed')) return false;
+      if (!text) return true;
+      return [String(pr.number), pr.title, pr.branch, pr.author || ''].join(' ').toLowerCase().indexOf(text) >= 0;
+    });
+  }
+  function unreviewedPrs() {
+    return state.prs.filter(function (pr) { return !pr.draft && !latestJobFor(pr.number); });
+  }
+  function updateBulk() {
+    var n = state.loaded ? unreviewedPrs().length : 0;
+    var btn = $('bulk');
+    btn.hidden = n < 2;
+    btn.textContent = 'Review all ' + n + ' not yet reviewed';
+  }
+  function reviewAllNew() {
+    var todo = unreviewedPrs();
+    if (!todo.length || !window.confirm('Start ' + todo.length + ' reviews? They run one after another, and each can take a few minutes on a local model.')) return;
+    var post = $('autopost').checked;
+    todo.reduce(function (chain, pr) {
+      return chain.then(function () { return api('/api/jobs', { method: 'POST', body: { owner: state.loaded.owner, repo: state.loaded.repo, pr: pr.number, autoPost: post } }); });
+    }, Promise.resolve()).then(function () { toast(todo.length + ' reviews queued.'); return pollJobs(); }).catch(function (err) { toast(err.message); pollJobs(); });
+  }
+
+  function fmtDuration(ms) {
+    var s = Math.max(0, Math.round(ms / 1000));
+    return s < 60 ? s + ' s' : Math.floor(s / 60) + ' min ' + (s % 60) + ' s';
+  }
+
+  function ruleIds(title) {
+    var m = /^((?:[A-Z]{1,3}\d+)(?:\/[A-Z]{1,3}\d+)*)\b/.exec(title || '');
+    return m ? m[1].split('/') : [];
+  }
+  function renderStats() {
+    var box = $('stats');
+    var reviewed = state.jobs.filter(function (j) { return j.preview; });
+    if (reviewed.length === 0) { box.hidden = true; return; }
+    box.hidden = false; box.textContent = '';
+    var findings = 0, posted = 0, rules = {};
+    reviewed.forEach(function (j) {
+      var all = j.preview.inlineFindings.concat(j.preview.summaryOnlyFindings);
+      findings += all.length;
+      if (j.status === 'posted') posted++;
+      all.forEach(function (f) { ruleIds(f.title).forEach(function (r) { rules[r] = (rules[r] || 0) + 1; }); });
+    });
+    function tile(big, label) { return el('div', { class: 'card stat' }, el('div', { class: 'big', text: String(big) }), el('div', { class: 'label', text: label })); }
+    box.appendChild(tile(reviewed.length, 'reviews run'));
+    box.appendChild(tile(findings, 'findings'));
+    box.appendChild(tile(posted, 'posted to GitHub'));
+    var top = Object.keys(rules).sort(function (a, b) { return rules[b] - rules[a]; }).slice(0, 6);
+    if (top.length) {
+      var tags = el('div', { class: 'tags' });
+      top.forEach(function (r) { tags.appendChild(el('span', { class: 'tag', text: r + ' × ' + rules[r] })); });
+      box.appendChild(el('div', { class: 'card stat wide' }, el('div', { class: 'label', text: 'Most often broken rules' }), tags));
+    }
+  }
+
+  function toMarkdown(job) {
+    var p = job.preview, all = p.inlineFindings.concat(p.summaryOnlyFindings);
+    var lines = ['# Review of ' + job.owner + '/' + job.repo + '#' + job.pr, '', p.summary, '', '## Findings (' + all.length + ')', ''];
+    all.forEach(function (f) {
+      lines.push('### [' + f.severity.toUpperCase() + '] ' + f.title, '`' + f.file + ':' + f.line + '`', '', f.explanation, '', '**Suggested fix:** ' + f.suggestedFix, '');
+    });
+    return lines.join('\n');
+  }
+  function copyText(text) {
+    var done = function () { toast('Copied to the clipboard.'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(done, function () { toast('Could not copy.'); }); return; }
+    var area = document.createElement('textarea');
+    area.value = text; document.body.appendChild(area); area.select();
+    try { document.execCommand('copy'); done(); } catch (e) { toast('Could not copy.'); }
+    document.body.removeChild(area);
+  }
+
   function renderPrs() {
     var box = $('prs');
     box.textContent = '';
-    $('prcount').textContent = state.loaded && state.prs.length ? state.prs.length + ' open' : '';
+    updateBulk();
+    var shown = state.loaded ? visiblePrs() : [];
+    $('prcount').textContent = state.loaded && state.prs.length ? (shown.length === state.prs.length ? state.prs.length + ' open' : shown.length + ' of ' + state.prs.length + ' shown') : '';
     if (!state.loaded) { box.appendChild(emptyState('Enter an owner and repository above, then press “Load pull requests”.')); return; }
     if (state.prs.length === 0) { box.appendChild(emptyState('No open pull requests in ' + state.loaded.owner + '/' + state.loaded.repo + '.')); return; }
-    state.prs.forEach(function (pr) {
+    if (shown.length === 0) { box.appendChild(emptyState('No pull requests match the filter.')); return; }
+    shown.forEach(function (pr) {
       var job = latestJobFor(pr.number);
       var busy = job && ACTIVE[job.status];
       var actions = el('div', { class: 'row-actions' });
@@ -418,6 +545,7 @@
           st.label));
       });
       panel.appendChild(list);
+      panel.appendChild(el('p', { class: 'hint', text: (job.status === 'queued' ? 'Waiting for ' : 'Running for ') + fmtDuration(Date.now() - new Date(job.createdAt).getTime()) }));
       if (job.status === 'queued') panel.appendChild(el('p', { class: 'hint', text: 'Another review is running; this one starts right after it.' }));
     }
 
@@ -426,6 +554,8 @@
       var all = p.inlineFindings.concat(p.summaryOnlyFindings);
       panel.appendChild(el('div', { class: 'summary', text: p.summary }));
       panel.appendChild(severityPills(all));
+      panel.appendChild(el('div', { class: 'actions', style: 'margin-top:4px' },
+        el('button', { class: 'ghost', text: 'Copy as Markdown', on: { click: function () { copyText(toMarkdown(job)); } } })));
       all.forEach(function (i, idx) { panel.appendChild(findingNode(i, job, idx)); });
       if (job.status === 'awaiting_confirmation') {
         panel.appendChild(el('div', { class: 'actions' },
@@ -473,7 +603,7 @@
   var timer = null;
   function pollJobs() {
     return api('/api/jobs').then(function (data) {
-      state.jobs = data.jobs; renderJobs(); renderPrs(); renderPanel(); loadAccuracy();
+      state.jobs = data.jobs; renderJobs(); renderPrs(); renderStats(); renderPanel(); loadAccuracy();
       var anyActive = state.jobs.some(function (j) { return ACTIVE[j.status]; });
       clearTimeout(timer);
       if (anyActive) timer = setTimeout(pollJobs, 2000);
@@ -602,6 +732,9 @@
   }
 
   $('load').addEventListener('click', loadPrs);
+  $('filter').addEventListener('input', renderPrs);
+  $('statusfilter').addEventListener('change', renderPrs);
+  $('bulk').addEventListener('click', reviewAllNew);
   $('autoreview').addEventListener('change', toggleAuto);
   $('newdoc').addEventListener('click', function () { openEditor(null); });
   $('signin').addEventListener('click', signIn);
