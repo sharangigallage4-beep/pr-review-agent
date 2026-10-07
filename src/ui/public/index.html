@@ -4,95 +4,170 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PR Review Assistant</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%233b5bdb'/%3E%3Cpath d='M10 9v14M22 9v8M22 17a3 3 0 1 1-6 0' stroke='white' stroke-width='2.4' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
   :root {
-    --bg: #f6f7f9; --surface: #ffffff; --text: #1c2330; --muted: #627086; --border: #dfe3ea;
-    --accent: #2457d6; --accent-text: #ffffff; --ok: #1a7f4b; --warn: #a15c00; --bad: #c0352b;
-    --crit: #c0352b; --high: #d9622b; --med: #b8860b; --low: #4f7cac;
-    --shadow: 0 1px 2px rgba(20, 30, 50, .06), 0 4px 16px rgba(20, 30, 50, .06);
+    --bg: #f3f5fa; --surface: #ffffff; --surface-2: #f7f8fc; --text: #172033; --muted: #5d6b82; --border: #e2e7f0;
+    --accent: #3b5bdb; --accent-hover: #2f4bc4; --accent-soft: #edf1ff; --accent-text: #ffffff;
+    --ok: #168a52; --warn: #b36b00; --bad: #c8372d; --idle: #8a96aa;
+    --crit: #c8372d; --high: #dd6b2c; --med: #b8860b; --low: #4f7cac;
+    --banner: linear-gradient(135deg, #3b5bdb 0%, #6741d9 100%);
+    --shadow: 0 1px 2px rgba(23, 32, 51, .05), 0 6px 20px rgba(23, 32, 51, .06);
+    --shadow-lift: 0 2px 4px rgba(23, 32, 51, .06), 0 10px 28px rgba(23, 32, 51, .10);
+    --radius: 14px; --on-sev: #ffffff;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #11151c; --surface: #1a2029; --text: #e6eaf1; --muted: #93a0b5; --border: #2a3342;
-      --accent: #6b93ff; --accent-text: #0b1020; --ok: #4cc38a; --warn: #e0a64a; --bad: #ff7a6e;
-      --crit: #ff7a6e; --high: #ff9a5c; --med: #e0b84a; --low: #7fb0e0;
-      --shadow: none;
+      --bg: #0e1320; --surface: #161d2e; --surface-2: #1b2438; --text: #e8ecf5; --muted: #93a1ba; --border: #263148;
+      --accent: #7c93ff; --accent-hover: #93a6ff; --accent-soft: #1d2745; --accent-text: #0b1020;
+      --ok: #4cc38a; --warn: #e5ac52; --bad: #ff8076; --idle: #7a879c;
+      --crit: #ff8076; --high: #ff9d62; --med: #e5bd52; --low: #82b3e6;
+      --banner: linear-gradient(135deg, #1d2b66 0%, #3b2a7a 100%);
+      --shadow: none; --shadow-lift: 0 8px 28px rgba(0, 0, 0, .35); --on-sev: #1a1016;
     }
   }
   * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
-  .wrap { max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
-  header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
-  h1 { font-size: 22px; margin: 0; }
-  h2 { font-size: 16px; margin: 28px 0 10px; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 16px; }
+
+  /* ---- banner */
+  .banner { background: var(--banner); color: #fff; padding: 28px 0 64px; }
+  .banner .wrap { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; justify-content: space-between; }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .logo { width: 44px; height: 44px; border-radius: 12px; background: rgba(255,255,255,.16); display: grid; place-items: center; flex: none; }
+  h1 { font-size: 22px; line-height: 1.2; margin: 0; letter-spacing: -.01em; }
+  .tagline { margin: 2px 0 0; font-size: 13.5px; opacity: .85; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; }
-  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-size: 13px; color: var(--muted); }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
-  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); }
-  .bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
-  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
-  input[type=text] { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; min-width: 0; width: 100%; }
-  .field { flex: 1 1 160px; }
-  button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: 8px 14px; }
-  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
-  button:disabled { opacity: .5; cursor: not-allowed; }
-  .check { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; font-size: 14px; color: var(--muted); }
-  .list { display: grid; gap: 10px; }
-  .pr { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
-  .pr-main { flex: 1 1 320px; min-width: 0; }
+  .chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.22); font-size: 13px; color: #fff; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #b8c0d4; flex: none; }
+  .dot.ok { background: #5be3a0; box-shadow: 0 0 0 3px rgba(91,227,160,.25); }
+  .dot.bad { background: #ff8f84; box-shadow: 0 0 0 3px rgba(255,143,132,.25); }
+  .dot.warn { background: #ffc766; box-shadow: 0 0 0 3px rgba(255,199,102,.25); }
+
+  main { margin-top: -40px; padding-bottom: 72px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+  .pad { padding: 16px 18px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; }
+  .field { flex: 1 1 170px; min-width: 0; }
+  label.lbl { display: block; font-size: 12px; font-weight: 600; letter-spacing: .02em; color: var(--muted); margin-bottom: 4px; }
+  input[type=text] { width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--text); font: inherit; transition: border-color .15s, box-shadow .15s; }
+  input[type=text]:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 14px; font-size: 14px; color: var(--muted); cursor: pointer; }
+  .check input { accent-color: var(--accent); width: 16px; height: 16px; }
+
+  button { font: inherit; font-weight: 500; cursor: pointer; border-radius: 10px; border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: 8px 16px; transition: background .15s, border-color .15s, box-shadow .15s, transform .05s; }
+  button:hover:not(:disabled) { background: var(--surface-2); border-color: var(--idle); }
+  button:active:not(:disabled) { transform: translateY(1px); }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; box-shadow: 0 1px 2px rgba(59,91,219,.35); }
+  button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
+  button.ghost { background: transparent; }
+  button:disabled { opacity: .55; cursor: not-allowed; }
+  button:focus-visible, a:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .section-head { display: flex; align-items: baseline; justify-content: space-between; margin: 32px 2px 12px; }
+  h2 { font-size: 17px; margin: 0; letter-spacing: -.005em; }
+  .count { font-size: 13px; color: var(--muted); }
+  .list { display: grid; gap: 12px; }
+
+  /* ---- PR cards */
+  .pr { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 14px 16px 14px 14px; border-left: 4px solid var(--border); transition: box-shadow .15s, transform .15s; }
+  .pr:hover { box-shadow: var(--shadow-lift); transform: translateY(-1px); }
+  .pr.s-posted { border-left-color: var(--ok); } .pr.s-failed { border-left-color: var(--bad); }
+  .pr.s-running, .pr.s-queued, .pr.s-awaiting_confirmation { border-left-color: var(--warn); }
+  .avatar { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 15px; flex: none; text-transform: uppercase; }
+  .pr-main { flex: 1 1 220px; min-width: 0; }
   .pr-title { font-weight: 600; overflow-wrap: anywhere; }
-  .pr-title a { color: inherit; text-decoration: none; } .pr-title a:hover { text-decoration: underline; }
-  .meta { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
-  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid currentColor; }
-  .badge.posted { color: var(--ok); } .badge.failed { color: var(--bad); } .badge.cancelled, .badge.skipped { color: var(--muted); }
+  .pr-title a { color: inherit; text-decoration: none; }
+  .pr-title a:hover { color: var(--accent); }
+  .num { display: inline-block; font-variant-numeric: tabular-nums; color: var(--muted); font-weight: 600; margin-right: 6px; }
+  .meta { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; margin-top: 2px; }
+  .branch { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; padding: 0 6px; }
+  .row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
+  .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .badge.posted { color: var(--ok); } .badge.failed { color: var(--bad); }
   .badge.running, .badge.queued, .badge.awaiting_confirmation { color: var(--warn); }
-  .sev { color: #fff; border: 0; padding: 2px 8px; }
-  .sev.critical { background: var(--crit); } .sev.high { background: var(--high); } .sev.medium { background: var(--med); } .sev.low { background: var(--low); }
-  .empty, .hint { color: var(--muted); font-size: 14px; }
+  .badge.running::before { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+
+  .empty { text-align: center; padding: 34px 16px; color: var(--muted); }
+  .empty svg { display: block; margin: 0 auto 10px; opacity: .55; }
   .error { color: var(--bad); }
-  .panel { margin-top: 16px; }
-  .panel-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
-  .steps { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 6px; }
-  .steps li { display: flex; gap: 8px; align-items: center; color: var(--muted); }
+
+  /* ---- review panel */
+  .panel { margin-top: 20px; border-top: 4px solid var(--accent); animation: rise .2s ease-out; }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+  .panel-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; }
+  .panel-title { font-size: 16px; font-weight: 700; }
+  .steps { list-style: none; padding: 0; margin: 14px 0 4px; display: grid; gap: 8px; }
+  .steps li { display: flex; gap: 10px; align-items: center; color: var(--muted); }
   .steps li.done { color: var(--text); } .steps li.active { color: var(--text); font-weight: 600; }
-  .spinner { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.9s linear infinite; }
+  .step-ico { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; border: 2px solid var(--border); flex: none; }
+  .done .step-ico { background: var(--ok); border-color: var(--ok); color: #fff; }
+  .spinner { width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin .9s linear infinite; flex: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
-  .finding { border-top: 1px solid var(--border); padding: 12px 0; }
-  .finding:first-child { border-top: 0; }
-  .finding h4 { margin: 4px 0; font-size: 15px; overflow-wrap: anywhere; }
+  .summary { margin: 14px 0 6px; padding: 12px 14px; background: var(--surface-2); border-radius: 10px; overflow-wrap: anywhere; }
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 4px; }
+  .pill { font-size: 13px; font-weight: 600; padding: 3px 12px; border-radius: 999px; color: var(--on-sev); }
+  .pill.critical, .sev.critical { background: var(--crit); } .pill.high, .sev.high { background: var(--high); }
+  .pill.medium, .sev.medium { background: var(--med); } .pill.low, .sev.low { background: var(--low); }
+  .pill.none { background: var(--ok); color: #fff; }
+  .finding { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--border); border-left: 4px solid var(--idle); border-radius: 10px; }
+  .finding.critical { border-left-color: var(--crit); } .finding.high { border-left-color: var(--high); }
+  .finding.medium { border-left-color: var(--med); } .finding.low { border-left-color: var(--low); }
+  .sev { display: inline-block; color: var(--on-sev); font-size: 11px; font-weight: 700; letter-spacing: .04em; padding: 2px 8px; border-radius: 6px; }
+  .loc { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; color: var(--muted); margin-left: 8px; overflow-wrap: anywhere; }
+  .finding h4 { margin: 8px 0 4px; font-size: 15px; overflow-wrap: anywhere; }
   .finding p { margin: 4px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
-  .fix { background: var(--bg); border-radius: 8px; padding: 8px 10px; font-size: 14px; }
-  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
-  details { margin-top: 10px; font-size: 13px; color: var(--muted); }
-  pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0 0; }
-  a.link { color: var(--accent); }
+  .fix { margin-top: 8px; background: var(--accent-soft); border-radius: 8px; padding: 8px 12px; font-size: 14px; overflow-wrap: anywhere; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; align-items: center; }
+  .hint { color: var(--muted); font-size: 13.5px; }
+  details { margin-top: 14px; font-size: 13px; color: var(--muted); }
+  summary { cursor: pointer; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; padding: 10px 12px; background: var(--surface-2); border-radius: 8px; font-size: 12px; }
+  a.link { color: var(--accent); font-weight: 600; }
+
+  .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 10px; box-shadow: var(--shadow-lift); font-size: 14px; max-width: calc(100vw - 32px); z-index: 10; }
+  @media (max-width: 560px) { .banner { padding-bottom: 56px; } .row-actions { width: 100%; } }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <h1>PR Review Assistant</h1>
+<div class="banner">
+  <div class="wrap">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="6" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="18" cy="16" r="2.2"/><path d="M6 8.2v7.6M18 13.8V9a3 3 0 0 0-3-3h-3"/><path d="m13.5 3.5-1.6 2.5 1.6 2.5"/></svg>
+      </div>
+      <div>
+        <h1>PR Review Assistant</h1>
+        <p class="tagline">AI code review for your pull requests, in one click</p>
+      </div>
+    </div>
     <div class="chips" id="chips" aria-live="polite"></div>
-  </header>
+  </div>
+</div>
 
-  <section class="card" aria-label="Repository">
+<main class="wrap">
+  <section class="card pad" aria-label="Repository">
     <div class="bar">
-      <div class="field"><label for="owner">Owner</label><input type="text" id="owner" autocomplete="off" spellcheck="false"></div>
-      <div class="field"><label for="repo">Repository</label><input type="text" id="repo" autocomplete="off" spellcheck="false"></div>
+      <div class="field"><label class="lbl" for="owner">OWNER</label><input type="text" id="owner" autocomplete="off" spellcheck="false" placeholder="e.g. my-company"></div>
+      <div class="field"><label class="lbl" for="repo">REPOSITORY</label><input type="text" id="repo" autocomplete="off" spellcheck="false" placeholder="e.g. my-project"></div>
       <button class="primary" id="load">Load pull requests</button>
     </div>
     <label class="check"><input type="checkbox" id="autopost"> Post comments to GitHub automatically (skip the preview)</label>
   </section>
 
-  <h2>Open pull requests</h2>
-  <div class="list" id="prs"><div class="empty">Choose a repository and press “Load pull requests”.</div></div>
+  <div class="section-head"><h2>Open pull requests</h2><span class="count" id="prcount"></span></div>
+  <div class="list" id="prs"></div>
 
-  <section class="card panel" id="panel" hidden aria-live="polite"></section>
+  <section class="card pad panel" id="panel" hidden aria-live="polite"></section>
 
-  <h2>Recent reviews</h2>
-  <div class="list" id="jobs"><div class="empty">No reviews yet in this session.</div></div>
-</div>
+  <div class="section-head"><h2>Recent reviews</h2></div>
+  <div class="list" id="jobs"></div>
+</main>
+<div class="toast" id="toast" role="status" hidden></div>
 
 <script>
 (function () {
@@ -139,27 +214,45 @@
     return Math.round(s / 86400) + ' d ago';
   }
 
+  var toastTimer = null;
+  function toast(message) {
+    var t = $('toast');
+    t.textContent = message; t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.hidden = true; }, 5000);
+  }
+
   var store = {
     get: function (k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } },
     set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage unavailable */ } }
   };
 
+  function avatar(name) {
+    var label = name || '?', hash = 0;
+    for (var i = 0; i < label.length; i++) hash = (hash * 31 + label.charCodeAt(i)) % 360;
+    return el('div', { class: 'avatar', 'aria-hidden': 'true', text: label.charAt(0), style: 'background:hsl(' + hash + ',48%,46%)' });
+  }
+  function emptyState(message) {
+    return el('div', { class: 'card empty' },
+      message);
+  }
+
   var state = { prs: [], jobs: [], openJobId: null, loaded: null };
   var STATUS_TEXT = { queued: 'Waiting in line', running: 'Reviewing…', awaiting_confirmation: 'Needs your decision', posted: 'Posted', cancelled: 'Discarded', skipped: 'Nothing to review', failed: 'Failed' };
   var ACTIVE = { queued: 1, running: 1, awaiting_confirmation: 1 };
+  var SEVERITIES = ['critical', 'high', 'medium', 'low'];
 
   // ---- header status chips
   function renderStatus(s) {
     var chips = $('chips');
     chips.textContent = '';
-    var m = s.model;
-    var modelLabel, modelClass;
+    var m = s.model, label, cls;
     if (m.kind === 'ollama') {
-      if (!m.reachable) { modelLabel = 'AI model: Ollama not reachable'; modelClass = 'bad'; }
-      else if (m.modelInstalled === false) { modelLabel = 'AI model: “' + m.name + '” is not installed in Ollama'; modelClass = 'warn'; }
-      else { modelLabel = 'AI model: Ollama · ' + (m.name || 'default'); modelClass = 'ok'; }
-    } else { modelLabel = 'AI model: Anthropic API' + (m.name ? ' · ' + m.name : ''); modelClass = 'ok'; }
-    chips.appendChild(el('span', { class: 'chip', title: m.baseUrl || '' }, el('span', { class: 'dot ' + modelClass }), modelLabel));
+      if (!m.reachable) { label = 'AI model: Ollama not reachable'; cls = 'bad'; }
+      else if (m.modelInstalled === false) { label = 'AI model: “' + m.name + '” is not installed in Ollama'; cls = 'warn'; }
+      else { label = 'AI model: Ollama · ' + (m.name || 'default'); cls = 'ok'; }
+    } else { label = 'AI model: Anthropic API' + (m.name ? ' · ' + m.name : ''); cls = 'ok'; }
+    chips.appendChild(el('span', { class: 'chip', title: m.baseUrl || '' }, el('span', { class: 'dot ' + cls }), label));
     chips.appendChild(el('span', { class: 'chip' }, el('span', { class: 'dot ' + (s.github.configured ? 'ok' : 'bad') }),
       s.github.configured ? 'GitHub connected' : 'GitHub token missing'));
   }
@@ -180,40 +273,46 @@
   function renderPrs() {
     var box = $('prs');
     box.textContent = '';
-    if (!state.loaded) { box.appendChild(el('div', { class: 'empty', text: 'Choose a repository and press “Load pull requests”.' })); return; }
-    if (state.prs.length === 0) { box.appendChild(el('div', { class: 'empty', text: 'No open pull requests in ' + state.loaded.owner + '/' + state.loaded.repo + '.' })); return; }
+    $('prcount').textContent = state.loaded && state.prs.length ? state.prs.length + ' open' : '';
+    if (!state.loaded) { box.appendChild(emptyState('Enter an owner and repository above, then press “Load pull requests”.')); return; }
+    if (state.prs.length === 0) { box.appendChild(emptyState('No open pull requests in ' + state.loaded.owner + '/' + state.loaded.repo + '.')); return; }
     state.prs.forEach(function (pr) {
       var job = latestJobFor(pr.number);
       var busy = job && ACTIVE[job.status];
-      var right = el('div', { class: 'actions', style: 'margin:0' });
-      if (job) right.appendChild(el('span', { class: 'badge ' + job.status, text: STATUS_TEXT[job.status] }));
-      if (job) right.appendChild(el('button', { text: 'View', on: { click: function () { openJob(job.id); } } }));
-      right.appendChild(el('button', { class: 'primary', text: busy ? 'In progress…' : (job ? 'Review again' : 'Review'), disabled: busy ? 'disabled' : null,
+      var actions = el('div', { class: 'row-actions' });
+      if (job) {
+        actions.appendChild(el('span', { class: 'badge ' + job.status, text: STATUS_TEXT[job.status] }));
+        actions.appendChild(el('button', { class: 'ghost', text: 'View', on: { click: function () { openJob(job.id); } } }));
+      }
+      actions.appendChild(el('button', { class: 'primary', text: busy ? 'In progress…' : (job ? 'Review again' : 'Review'), disabled: busy ? 'disabled' : null,
         on: { click: function () { startReview(pr); } } }));
-      box.appendChild(el('div', { class: 'card pr' },
+      box.appendChild(el('div', { class: 'card pr' + (job ? ' s-' + job.status : '') },
+        avatar(pr.author),
         el('div', { class: 'pr-main' },
-          el('div', { class: 'pr-title' }, el('a', { href: pr.url, target: '_blank', rel: 'noopener noreferrer', text: '#' + pr.number + '  ' + pr.title })),
-          el('div', { class: 'meta', text: pr.branch + ' → ' + pr.baseBranch + ' · ' + (pr.author || 'unknown') + ' · updated ' + ago(pr.updatedAt) + (pr.draft ? ' · draft' : '') })),
-        right));
+          el('div', { class: 'pr-title' }, el('span', { class: 'num', text: '#' + pr.number }),
+            el('a', { href: pr.url, target: '_blank', rel: 'noopener noreferrer', text: pr.title })),
+          el('div', { class: 'meta' }, el('span', { class: 'branch', text: pr.branch }), ' → ', el('span', { class: 'branch', text: pr.baseBranch }),
+            ' · ' + (pr.author || 'unknown') + ' · updated ' + ago(pr.updatedAt) + (pr.draft ? ' · draft' : ''))),
+        actions));
     });
   }
   function loadPrs() {
     var owner = $('owner').value.trim(), repo = $('repo').value.trim();
-    if (!owner || !repo) { $('prs').textContent = ''; $('prs').appendChild(el('div', { class: 'error', text: 'Enter both the owner and the repository name.' })); return Promise.resolve(); }
+    if (!owner || !repo) { toast('Enter both the owner and the repository name.'); return Promise.resolve(); }
     store.set('owner', owner); store.set('repo', repo);
-    $('load').disabled = true;
+    $('load').disabled = true; $('load').textContent = 'Loading…';
     return api('/api/prs?owner=' + encodeURIComponent(owner) + '&repo=' + encodeURIComponent(repo)).then(function (data) {
       state.loaded = { owner: data.owner, repo: data.repo }; state.prs = data.pullRequests; renderPrs();
     }).catch(function (err) {
-      state.loaded = null; state.prs = []; $('prs').textContent = ''; $('prs').appendChild(el('div', { class: 'error', text: err.message }));
-    }).then(function () { $('load').disabled = false; });
+      state.loaded = null; state.prs = []; renderPrs(); toast(err.message);
+    }).then(function () { $('load').disabled = false; $('load').textContent = 'Load pull requests'; });
   }
 
   // ---- reviews
   function startReview(pr) {
     api('/api/jobs', { method: 'POST', body: { owner: state.loaded.owner, repo: state.loaded.repo, pr: pr.number, autoPost: $('autopost').checked } })
-      .then(function (job) { state.openJobId = job.id; return pollJobs(); })
-      .catch(function (err) { alert(err.message); });
+      .then(function (job) { state.openJobId = job.id; return pollJobs().then(function () { $('panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); }); })
+      .catch(function (err) { toast(err.message); });
   }
   function openJob(id) { state.openJobId = id; renderPanel(); $('panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
 
@@ -225,7 +324,6 @@
 
   function stepsFor(job) {
     var text = job.log.map(function (l) { return l.message; }).join('\n');
-    // Only called while a job is queued or running.
     var readDone = /Filtered changed files/.test(text);
     return {
       steps: [
@@ -237,12 +335,21 @@
   }
 
   function findingNode(issue) {
-    return el('div', { class: 'finding' },
-      el('div', null, el('span', { class: 'badge sev ' + issue.severity, text: issue.severity.toUpperCase() }), ' ',
-        el('span', { class: 'meta', text: issue.file + ':' + issue.line })),
+    return el('div', { class: 'finding ' + issue.severity },
+      el('div', null, el('span', { class: 'sev ' + issue.severity, text: issue.severity.toUpperCase() }),
+        el('span', { class: 'loc', text: issue.file + ':' + issue.line })),
       el('h4', { text: issue.title }),
       el('p', { text: issue.explanation }),
       el('div', { class: 'fix' }, el('strong', { text: 'Suggested fix: ' }), issue.suggestedFix));
+  }
+  function severityPills(findings) {
+    var wrap = el('div', { class: 'pills' });
+    if (findings.length === 0) { wrap.appendChild(el('span', { class: 'pill none', text: 'No issues found' })); return wrap; }
+    SEVERITIES.forEach(function (sev) {
+      var n = findings.filter(function (f) { return f.severity === sev; }).length;
+      if (n) wrap.appendChild(el('span', { class: 'pill ' + sev, text: n + ' ' + sev }));
+    });
+    return wrap;
   }
 
   function renderPanel() {
@@ -252,7 +359,7 @@
     panel.hidden = false;
     panel.textContent = '';
     panel.appendChild(el('div', { class: 'panel-head' },
-      el('strong', { text: job.owner + '/' + job.repo + ' · PR #' + job.pr }),
+      el('span', { class: 'panel-title', text: job.owner + '/' + job.repo + ' · PR #' + job.pr }),
       el('span', { class: 'badge ' + job.status, text: STATUS_TEXT[job.status] })));
 
     if (job.status === 'queued' || job.status === 'running') {
@@ -260,7 +367,9 @@
       var list = el('ul', { class: 'steps' });
       s.steps.forEach(function (st, i) {
         var cls = st.done ? 'done' : (i === s.active ? 'active' : '');
-        list.appendChild(el('li', { class: cls }, st.done ? '✓' : (i === s.active ? el('span', { class: 'spinner' }) : '○'), st.label));
+        list.appendChild(el('li', { class: cls },
+          st.done ? el('span', { class: 'step-ico', text: '✓' }) : (i === s.active ? el('span', { class: 'spinner' }) : el('span', { class: 'step-ico' })),
+          st.label));
       });
       panel.appendChild(list);
       if (job.status === 'queued') panel.appendChild(el('p', { class: 'hint', text: 'Another review is running; this one starts right after it.' }));
@@ -268,20 +377,20 @@
 
     if (job.status === 'awaiting_confirmation' || (job.preview && (job.status === 'posted' || job.status === 'cancelled'))) {
       var p = job.preview;
-      var total = p.inlineFindings.length + p.summaryOnlyFindings.length;
-      panel.appendChild(el('p', { text: p.summary }));
-      if (total === 0) panel.appendChild(el('p', { class: 'hint', text: 'No new findings to post.' }));
-      p.inlineFindings.concat(p.summaryOnlyFindings).forEach(function (i) { panel.appendChild(findingNode(i)); });
+      var all = p.inlineFindings.concat(p.summaryOnlyFindings);
+      panel.appendChild(el('div', { class: 'summary', text: p.summary }));
+      panel.appendChild(severityPills(all));
+      all.forEach(function (i) { panel.appendChild(findingNode(i)); });
       if (job.status === 'awaiting_confirmation') {
         panel.appendChild(el('div', { class: 'actions' },
           el('button', { class: 'primary', text: 'Post to GitHub', on: { click: function () { decide(job, true); } } }),
-          el('button', { text: 'Discard', on: { click: function () { decide(job, false); } } })));
-        panel.appendChild(el('p', { class: 'hint', text: 'Nothing is posted until you press “Post to GitHub”.' }));
+          el('button', { text: 'Discard', on: { click: function () { decide(job, false); } } }),
+          el('span', { class: 'hint', text: 'Nothing is posted until you press “Post to GitHub”.' })));
       }
     }
 
     if (job.status === 'posted' && job.outcome) {
-      panel.appendChild(el('p', null, 'Review posted: ', el('a', { class: 'link', href: job.outcome.reviewUrl, target: '_blank', rel: 'noopener noreferrer', text: 'open on GitHub' })));
+      panel.appendChild(el('p', null, '✓ Review posted: ', el('a', { class: 'link', href: job.outcome.reviewUrl, target: '_blank', rel: 'noopener noreferrer', text: 'open on GitHub' })));
     }
     if (job.status === 'skipped' && job.outcome) {
       panel.appendChild(el('p', { class: 'hint', text: job.outcome.reason === 'all_findings_already_posted' ? 'Every finding was already posted in an earlier review.' : 'There were no reviewable files in this pull request.' }));
@@ -297,21 +406,21 @@
 
   function decide(job, post) {
     api('/api/jobs/' + encodeURIComponent(job.id) + '/confirm', { method: 'POST', body: { post: post } })
-      .then(pollJobs).catch(function (err) { alert(err.message); pollJobs(); });
+      .then(pollJobs).catch(function (err) { toast(err.message); pollJobs(); });
   }
 
   function renderJobs() {
     var box = $('jobs');
     box.textContent = '';
-    if (state.jobs.length === 0) { box.appendChild(el('div', { class: 'empty', text: 'No reviews yet in this session.' })); return; }
+    if (state.jobs.length === 0) { box.appendChild(emptyState('No reviews yet. Press “Review” on a pull request to start one.')); return; }
     state.jobs.slice(0, 15).forEach(function (job) {
-      box.appendChild(el('div', { class: 'card pr' },
+      box.appendChild(el('div', { class: 'card pr s-' + job.status },
         el('div', { class: 'pr-main' },
-          el('div', { class: 'pr-title', text: job.owner + '/' + job.repo + ' · PR #' + job.pr }),
+          el('div', { class: 'pr-title' }, el('span', { class: 'num', text: '#' + job.pr }), job.owner + '/' + job.repo),
           el('div', { class: 'meta', text: 'started ' + ago(job.createdAt) })),
-        el('div', { class: 'actions', style: 'margin:0' },
+        el('div', { class: 'row-actions' },
           el('span', { class: 'badge ' + job.status, text: STATUS_TEXT[job.status] }),
-          el('button', { text: 'View', on: { click: function () { openJob(job.id); } } }))));
+          el('button', { class: 'ghost', text: 'View', on: { click: function () { openJob(job.id); } } }))));
     });
   }
 
@@ -330,6 +439,7 @@
   $('load').addEventListener('click', loadPrs);
   [$('owner'), $('repo')].forEach(function (i) { i.addEventListener('keydown', function (e) { if (e.key === 'Enter') loadPrs(); }); });
 
+  renderPrs(); renderJobs();
   refreshStatus();
   setInterval(refreshStatus, 15000);
   api('/api/status').then(function (s) {
