@@ -1,5 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { JobManager } from './jobs.js';
 import type { Job } from './jobs.js';
 import type { ReviewPreview, ReviewPullRequestOutcome } from '../workflow/reviewPullRequestWorkflow.js';
@@ -134,4 +137,61 @@ describe('JobManager', () => {
     await waitFor(job, (j) => j.status === 'skipped');
     assert.deepEqual(job.log.map((l) => l.message), ['Fetched full PR diff']);
   });
+});
+
+describe('JobManager history and feedback', () => {
+  function withHistory(fn: (file: string) => Promise<void>): Promise<void> {
+    const dir = mkdtempSync(path.join(tmpdir(), 'history-'));
+    return fn(path.join(dir, 'history.json')).finally(() => rmSync(dir, { recursive: true, force: true }));
+  }
+
+  test('finished reviews survive a restart, with their preview', () =>
+    withHistory(async (historyFile) => {
+      const first = new JobManager({ runReview: gatedRun(), echo: silent, historyFile });
+      const job = first.start('acme', 'widgets', 7, true);
+      await waitFor(job, (j) => j.status === 'posted');
+
+      const second = new JobManager({ echo: silent, historyFile });
+      const restored = second.get(job.id);
+      assert.equal(restored?.status, 'posted');
+      assert.equal(restored?.preview?.inlineFindings.length, 1);
+    }));
+
+  test('a review that was in flight at shutdown comes back as failed, not "running"', () =>
+    withHistory(async (historyFile) => {
+      const first = new JobManager({ runReview: gatedRun(), echo: silent, historyFile });
+      const job = first.start('acme', 'widgets', 7);
+      await waitFor(job, (j) => j.status === 'awaiting_confirmation');
+
+      const second = new JobManager({ echo: silent, historyFile });
+      const restored = second.get(job.id);
+      assert.equal(restored?.status, 'failed');
+      assert.match(restored?.error ?? '', /restarted/);
+      first.confirm(job.id, false);
+    }));
+
+  test('a corrupt history file is ignored instead of breaking startup', () =>
+    withHistory(async (historyFile) => {
+      writeFileSync(historyFile, '{not json');
+      assert.deepEqual(new JobManager({ echo: silent, historyFile }).list(), []);
+    }));
+
+  test('feedback is stored per finding, summarized, clearable, and validated', () =>
+    withHistory(async (historyFile) => {
+      const jobs = new JobManager({ runReview: gatedRun(), echo: silent, historyFile });
+      const job = jobs.start('acme', 'widgets', 7, true);
+      await waitFor(job, (j) => j.status === 'posted');
+
+      assert.equal(jobs.setFeedback(job.id, 0, 'up'), true);
+      assert.equal(jobs.setFeedback(job.id, 5, 'up'), false, 'no such finding');
+      assert.equal(jobs.setFeedback('missing', 0, 'up'), false, 'no such job');
+      assert.deepEqual(jobs.feedbackSummary(), { up: 1, down: 0, percentUp: 100 });
+
+      jobs.setFeedback(job.id, 0, 'down');
+      assert.deepEqual(jobs.feedbackSummary(), { up: 0, down: 1, percentUp: 0 });
+      assert.equal(new JobManager({ echo: silent, historyFile }).get(job.id)?.feedback?.['0'], 'down');
+
+      jobs.setFeedback(job.id, 0, null);
+      assert.deepEqual(jobs.feedbackSummary(), { up: 0, down: 0, percentUp: null });
+    }));
 });

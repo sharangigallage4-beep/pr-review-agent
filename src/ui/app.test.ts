@@ -7,6 +7,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { buildUiApp } from './app.js';
 import { JobManager } from './jobs.js';
+import { createAuth } from './auth.js';
+import { AutoReviewer } from './autoReview.js';
 import { readStatus } from './services.js';
 
 const silent = { info() {}, warn() {}, error() {} };
@@ -37,7 +39,7 @@ describe('review UI app', () => {
       publicDir,
       listPullRequests: async (owner, repo) => {
         if (repo === 'missing') throw new Error('Repository acme/missing was not found, or the token cannot see it.');
-        return [{ number: 1, title: 'T', author: 'a', branch: 'b', baseBranch: 'main', updatedAt: '2026-01-01T00:00:00Z', url: 'u', draft: false }];
+        return [{ number: 1, title: 'T', author: 'a', branch: 'b', baseBranch: 'main', updatedAt: '2026-01-01T00:00:00Z', url: 'u', draft: false, headSha: 'abc123' }];
       },
       getStatus: async () => ({ github: { configured: true, owner: 'acme', repo: 'widgets' }, model: { kind: 'ollama', reachable: true } }),
     });
@@ -144,5 +146,135 @@ describe('readStatus', () => {
       throw new Error('ECONNREFUSED');
     }) as unknown as typeof fetch;
     assert.equal((await readStatus(env, down)).model.reachable, false);
+  });
+});
+
+describe('review UI app: login, feedback, auto-review, rules editor', () => {
+  let server: Server;
+  let base: string;
+  let dirs: string[] = [];
+  let conventionsDir: string;
+
+  const preview = {
+    owner: 'o', repo: 'r', pullRequestNumber: 1, summary: 's',
+    inlineFindings: [{ severity: 'high', file: 'a.js', line: 1, title: 't', explanation: 'e', suggestedFix: 'f' }],
+    summaryOnlyFindings: [],
+  };
+
+  before(async () => {
+    const publicDir = mkdtempSync(path.join(tmpdir(), 'ui-public2-'));
+    writeFileSync(path.join(publicDir, 'index.html'), '<h1>login page</h1>');
+    conventionsDir = mkdtempSync(path.join(tmpdir(), 'ui-conv-'));
+    dirs = [publicDir, conventionsDir];
+
+    const jobs = new JobManager({
+      echo: silent,
+      runReview: (async (_o: string, _r: string, _n: number, overrides: { confirmBeforePosting?: (p: unknown) => unknown }) => {
+        await overrides.confirmBeforePosting?.(preview);
+        return { status: 'posted', reviewId: 1, reviewUrl: 'u', newCommentCount: 1, summaryOnlyCount: 0, totalFindings: 1 };
+      }) as never,
+    });
+    const auto = new AutoReviewer({ jobs, listPullRequests: async () => [], intervalMs: 3_600_000 });
+    const app = buildUiApp({
+      jobs,
+      publicDir,
+      listPullRequests: async () => [],
+      getStatus: async () => ({ github: { configured: true }, model: { kind: 'anthropic' } }),
+      auth: createAuth({ password: 'open sesame', maxFailuresPerMinute: 3 }),
+      auto,
+      conventionsDir,
+    });
+    server = app.listen(0, '127.0.0.1');
+    await new Promise((r) => server.once('listening', r));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  after(() => {
+    server.close();
+    for (const d of dirs) rmSync(d, { recursive: true, force: true });
+  });
+
+  const send = (method: string, p: string, body?: unknown, cookie?: string) =>
+    fetch(base + p, {
+      method,
+      headers: { 'content-type': 'application/json', ...(cookie ? { cookie } : {}) },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+
+  async function signIn(): Promise<string> {
+    const res = await send('POST', '/api/login', { password: 'open sesame' });
+    assert.equal(res.status, 200);
+    const setCookie = res.headers.get('set-cookie') ?? '';
+    assert.match(setCookie, /HttpOnly/);
+    assert.match(setCookie, /SameSite=Strict/);
+    return setCookie.split(';')[0];
+  }
+
+  test('the page itself is public, but the API is locked until you sign in', async () => {
+    assert.match(await (await fetch(base + '/')).text(), /login page/);
+    assert.equal((await send('GET', '/api/status')).status, 401);
+    assert.equal((await send('GET', '/api/jobs')).status, 401);
+    const session = await body(await send('GET', '/api/session'));
+    assert.deepEqual(session, { authRequired: true, authenticated: false });
+  });
+
+  test('a forged cookie does not open the API', async () => {
+    assert.equal((await send('GET', '/api/status', undefined, 'pr_review_session=9999999999999.forged')).status, 401);
+  });
+
+  test('signing in opens the API, and signing out closes it again', async () => {
+    const cookie = await signIn();
+    assert.equal((await send('GET', '/api/status', undefined, cookie)).status, 200);
+    assert.deepEqual(await body(await send('GET', '/api/session', undefined, cookie)), { authRequired: true, authenticated: true });
+    const out = await send('POST', '/api/logout', {}, cookie);
+    assert.match(out.headers.get('set-cookie') ?? '', /Max-Age=0/);
+  });
+
+  test('feedback is recorded per finding and summarized', async () => {
+    const cookie = await signIn();
+    const job = await body(await send('POST', '/api/jobs', { owner: 'o', repo: 'r', pr: 1, autoPost: true }, cookie));
+    for (let i = 0; i < 100; i += 1) {
+      const current = await body(await send('GET', `/api/jobs/${job.id}`, undefined, cookie));
+      if (current.status === 'posted') break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    const ok = await body(await send('POST', `/api/jobs/${job.id}/feedback`, { index: 0, vote: 'down' }, cookie));
+    assert.deepEqual(ok.summary, { up: 0, down: 1, percentUp: 0 });
+    assert.equal((await send('POST', `/api/jobs/${job.id}/feedback`, { index: 9, vote: 'up' }, cookie)).status, 404);
+    assert.equal((await send('POST', `/api/jobs/${job.id}/feedback`, { index: 0, vote: 'maybe' }, cookie)).status, 400);
+    assert.deepEqual(await body(await send('GET', '/api/feedback', undefined, cookie)), { up: 0, down: 1, percentUp: 0 });
+  });
+
+  test('the auto-review switch validates its settings', async () => {
+    const cookie = await signIn();
+    assert.equal((await send('POST', '/api/auto', { enabled: true, owner: 'a/b', repo: 'c' }, cookie)).status, 400);
+    const on = await body(await send('POST', '/api/auto', { enabled: true, autoPost: false, owner: 'acme', repo: 'widgets' }, cookie));
+    assert.equal(on.enabled, true);
+    assert.equal((await body(await send('GET', '/api/auto', undefined, cookie))).owner, 'acme');
+    const off = await body(await send('POST', '/api/auto', { enabled: false }, cookie));
+    assert.equal(off.enabled, false);
+  });
+
+  test('the rules editor lists, saves, validates and deletes documents', async () => {
+    const cookie = await signIn();
+    const saved = await send('PUT', '/api/conventions/my-rules.md', { content: '<!-- applies-to: .js -->\n- X1. Be nice.' }, cookie);
+    assert.equal(saved.status, 200);
+    assert.equal((await body(saved)).ruleCount, 1);
+    assert.equal((await body(await send('GET', '/api/conventions', undefined, cookie))).docs.length, 1);
+
+    assert.equal((await send('PUT', '/api/conventions/..%2Fevil.md', { content: 'x' }, cookie)).status, 400);
+    assert.equal((await send('PUT', '/api/conventions/bad.txt', { content: 'x' }, cookie)).status, 400);
+    assert.equal((await send('PUT', '/api/conventions/ok.md', { content: '' }, cookie)).status, 400);
+    assert.equal((await send('PUT', '/api/conventions/ok.md', { content: 5 }, cookie)).status, 400);
+
+    assert.equal((await send('DELETE', '/api/conventions/my-rules.md', undefined, cookie)).status, 200);
+    assert.equal((await send('DELETE', '/api/conventions/my-rules.md', undefined, cookie)).status, 404);
+  });
+
+  // Last on purpose: failed logins are counted per client address, so this blocks it for a minute.
+  test('a wrong password is refused, and repeated guesses are throttled', async () => {
+    for (let i = 0; i < 3; i += 1) assert.equal((await send('POST', '/api/login', { password: 'nope' })).status, 401);
+    const blocked = await send('POST', '/api/login', { password: 'open sesame' });
+    assert.equal(blocked.status, 429, 'even the right password is refused while blocked');
   });
 });

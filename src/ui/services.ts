@@ -26,7 +26,7 @@ export async function listOpenPullRequests(
     number: number;
     title: string;
     user: { login: string } | null;
-    head: { ref: string };
+    head: { ref: string; sha: string };
     base: { ref: string };
     updated_at: string;
     html_url: string;
@@ -41,6 +41,7 @@ export async function listOpenPullRequests(
     updatedAt: pr.updated_at,
     url: pr.html_url,
     draft: pr.draft === true,
+    headSha: pr.head.sha,
   }));
 }
 

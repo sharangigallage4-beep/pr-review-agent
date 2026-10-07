@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { reviewPullRequest } from '../workflow/reviewPullRequestWorkflow.js';
 import type { ReviewPreview, ReviewPullRequestOutcome } from '../workflow/reviewPullRequestWorkflow.js';
 import { consoleLogger, toSafeLogFields } from '../workflow/logger.js';
@@ -34,18 +35,32 @@ export interface Job {
   outcome?: ReviewPullRequestOutcome;
   /** Plain-language failure reason - always already passed through toSafeLogFields(). */
   error?: string;
+  /** The user's 👍/👎 on each finding, keyed by its position in inlineFindings + summaryOnlyFindings. */
+  feedback?: Record<string, FeedbackVote>;
+}
+
+export type FeedbackVote = 'up' | 'down';
+
+export interface FeedbackSummary {
+  up: number;
+  down: number;
+  /** Share of 👍 among rated findings, 0-100, or null when nothing has been rated. */
+  percentUp: number | null;
 }
 
 export interface JobManagerOptions {
   /** Injectable for tests - defaults to the real end-to-end review workflow. */
   runReview?: typeof reviewPullRequest;
-  /** How long a finished preview waits for Post/Discard before being discarded. Default 30 min. */
+  /** How long a finished preview waits for Post/Discard before being discarded. Default 12 hours. */
   confirmTimeoutMs?: number;
   /** Mirror every job log line here too (defaults to the console logger). */
   echo?: typeof consoleLogger;
+  /** JSON file the review history is kept in, so it survives a restart. Omit for memory only. */
+  historyFile?: string;
 }
 
 const MAX_LOG_LINES = 200;
+const MAX_SAVED_JOBS = 100;
 
 /**
  * Runs PR reviews one at a time (a single local model can only do one job well) and keeps their
@@ -60,10 +75,13 @@ export class JobManager {
   private readonly runReview: typeof reviewPullRequest;
   private readonly confirmTimeoutMs: number;
   private readonly echo: typeof consoleLogger;
+  private readonly historyFile: string | undefined;
 
   constructor(options: JobManagerOptions = {}) {
+    this.historyFile = options.historyFile;
+    this.loadHistory();
     this.runReview = options.runReview ?? reviewPullRequest;
-    this.confirmTimeoutMs = options.confirmTimeoutMs ?? 30 * 60_000;
+    this.confirmTimeoutMs = options.confirmTimeoutMs ?? 12 * 60 * 60_000;
     this.echo = options.echo ?? consoleLogger;
   }
 
@@ -102,6 +120,7 @@ export class JobManager {
       log: [],
     };
     this.jobs.set(job.id, job);
+    this.save();
     this.queue = this.queue.then(() => this.run(job)).catch(() => undefined);
     return job;
   }
@@ -113,6 +132,60 @@ export class JobManager {
     this.pending.delete(id);
     resolve(post);
     return true;
+  }
+
+  /** Records (or, with null, clears) a 👍/👎 for one finding. False if the job or finding doesn't exist. */
+  setFeedback(id: string, index: number, vote: FeedbackVote | null): boolean {
+    const job = this.jobs.get(id);
+    const total = job?.preview ? job.preview.inlineFindings.length + job.preview.summaryOnlyFindings.length : 0;
+    if (!job || !Number.isInteger(index) || index < 0 || index >= total) return false;
+    job.feedback ??= {};
+    if (vote === null) delete job.feedback[String(index)];
+    else job.feedback[String(index)] = vote;
+    this.save();
+    return true;
+  }
+
+  feedbackSummary(): FeedbackSummary {
+    let up = 0;
+    let down = 0;
+    for (const job of this.jobs.values()) {
+      for (const vote of Object.values(job.feedback ?? {})) {
+        if (vote === 'up') up += 1;
+        else if (vote === 'down') down += 1;
+      }
+    }
+    return { up, down, percentUp: up + down === 0 ? null : Math.round((up / (up + down)) * 100) };
+  }
+
+  private loadHistory(): void {
+    if (!this.historyFile || !existsSync(this.historyFile)) return;
+    try {
+      const saved = JSON.parse(readFileSync(this.historyFile, 'utf8')) as Job[];
+      for (const job of saved) {
+        // A review that was still in flight when the server stopped can never finish (its
+        // Post/Discard gate lived in memory), so show it as failed rather than forever "running".
+        if (job.status === 'queued' || job.status === 'running' || job.status === 'awaiting_confirmation') {
+          job.status = 'failed';
+          job.error = 'The server was restarted while this review was in progress. Start it again.';
+        }
+        this.jobs.set(job.id, job);
+      }
+    } catch {
+      // An unreadable history file is not worth failing startup over - start with an empty list.
+    }
+  }
+
+  private save(): void {
+    if (!this.historyFile) return;
+    try {
+      const newest = this.list().slice(0, MAX_SAVED_JOBS);
+      const tmp = `${this.historyFile}.tmp`;
+      writeFileSync(tmp, JSON.stringify(newest));
+      renameSync(tmp, this.historyFile);
+    } catch {
+      // Saving history is best effort - never break a review because the disk write failed.
+    }
   }
 
   private addLog(job: Job, level: JobLogLine['level'], message: string): void {
@@ -144,6 +217,7 @@ export class JobManager {
           job.preview = preview;
           if (job.autoPost) return true;
           job.status = 'awaiting_confirmation';
+          this.save();
           return new Promise<boolean>((resolve) => {
             const timer = setTimeout(() => {
               this.pending.delete(job.id);
@@ -180,5 +254,6 @@ export class JobManager {
       job.status = 'failed';
       job.error = toSafeLogFields(err).message;
     }
+    this.save();
   }
 }

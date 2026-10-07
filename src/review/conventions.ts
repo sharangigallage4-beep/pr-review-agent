@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const DEFAULT_MAX_CHARS = 20_000;
 
 /** Folder holding the team's coding-convention .md files, relative to the project root. */
-function defaultConventionsDir(): string {
+export function defaultConventionsDir(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   // <root>/src/review in dev (tsx), <root>/dist/review once built - both two levels below the root.
   return path.join(here, '..', '..', 'docs', 'conventions');

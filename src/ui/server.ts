@@ -2,15 +2,20 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadDotEnv } from '../loadEnv.js';
+import { defaultConventionsDir } from '../review/conventions.js';
 import { buildUiApp } from './app.js';
+import { createAuth } from './auth.js';
+import { AutoReviewer } from './autoReview.js';
 import { JobManager } from './jobs.js';
 import { listOpenPullRequests, readStatus } from './services.js';
 
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+
 /**
  * Starts the review web UI (`npm run ui`). Listens on 127.0.0.1 only by default - the page can post
- * comments to GitHub with the configured token, so it is a local tool unless you deliberately
- * change PR_REVIEW_UI_HOST (and then set PR_REVIEW_UI_ALLOWED_HOSTS and put it behind your own
- * authentication, e.g. a reverse proxy - the app has no login of its own).
+ * comments to GitHub with the configured token. To share it on a network set PR_REVIEW_UI_HOST,
+ * PR_REVIEW_UI_ALLOWED_HOSTS and PR_REVIEW_UI_PASSWORD; the server refuses to listen on a
+ * non-loopback address without a password, and you should still put it behind HTTPS.
  */
 function main(): void {
   loadDotEnv();
@@ -24,21 +29,39 @@ function main(): void {
 
   const port = Number(process.env.PR_REVIEW_UI_PORT) || 4500;
   const host = process.env.PR_REVIEW_UI_HOST || '127.0.0.1';
+  const password = process.env.PR_REVIEW_UI_PASSWORD || '';
+  if (!LOOPBACK_HOSTS.has(host) && !password) {
+    console.error(
+      `Refusing to listen on ${host} without a password: anyone who can reach this page could post to GitHub with your token. ` +
+        'Set PR_REVIEW_UI_PASSWORD (see .env.example), or leave PR_REVIEW_UI_HOST unset to keep it local.'
+    );
+    process.exitCode = 1;
+    return;
+  }
   const allowedHosts = (process.env.PR_REVIEW_UI_ALLOWED_HOSTS ?? '')
     .split(',')
     .map((h) => h.trim())
     .filter(Boolean);
 
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const root = path.join(here, '..', '..');
+  const jobs = new JobManager({ historyFile: path.join(root, '.review-history.json') });
+  const listPullRequests = (owner: string, repo: string) => listOpenPullRequests(owner, repo, token);
+
   const app = buildUiApp({
-    jobs: new JobManager(),
-    listPullRequests: (owner, repo) => listOpenPullRequests(owner, repo, token),
+    jobs,
+    listPullRequests,
     getStatus: () => readStatus(process.env),
-    publicDir: path.join(path.dirname(fileURLToPath(import.meta.url)), 'public'),
+    publicDir: path.join(here, 'public'),
     allowedHosts,
+    auth: password ? createAuth({ password, cookieSecure: process.env.PR_REVIEW_UI_COOKIE_SECURE === 'true' }) : undefined,
+    auto: new AutoReviewer({ jobs, listPullRequests, stateFile: path.join(root, '.ui-auto-state.json') }),
+    conventionsDir: process.env.PR_REVIEW_CONVENTIONS_DIR || defaultConventionsDir(),
   });
 
   app.listen(port, host, () => {
     console.log(`PR review UI running at http://${host === '0.0.0.0' ? 'localhost' : host}:${port}  (Ctrl+C to stop)`);
+    if (password) console.log('Password protection is ON.');
   });
 }
 

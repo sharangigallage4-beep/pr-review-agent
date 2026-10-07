@@ -3,3 +3,6 @@ dist/
 .env
 *.log
 .watch-state.json
+.review-history.json
+.ui-auto-state.json
+*.tmp

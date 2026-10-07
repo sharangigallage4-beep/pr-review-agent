@@ -1,6 +1,11 @@
 import express from 'express';
 import type { Express, NextFunction, Request, Response } from 'express';
 import { JobManager } from './jobs.js';
+import type { FeedbackVote } from './jobs.js';
+import { SESSION_COOKIE, readCookie } from './auth.js';
+import type { Auth } from './auth.js';
+import type { AutoReviewer } from './autoReview.js';
+import { ConventionError, deleteConventionDoc, listConventionDocs, saveConventionDoc } from './conventionsStore.js';
 
 export interface PullRequestSummary {
   number: number;
@@ -11,6 +16,8 @@ export interface PullRequestSummary {
   updatedAt: string;
   url: string;
   draft: boolean;
+  /** The commit the PR currently points at - a new commit means it needs a new review. */
+  headSha: string;
 }
 
 export interface AppStatus {
@@ -38,10 +45,17 @@ export interface BuildUiAppOptions {
    * when the UI is deliberately shared on a network). Leave empty for a purely local tool.
    */
   allowedHosts?: string[];
+  /** When set, every /api route except login needs a signed-in session. */
+  auth?: Auth;
+  /** Enables the "auto-review new PRs" switch. */
+  auto?: AutoReviewer;
+  /** Folder of convention .md files (the one the reviewer loads). Enables the rules editor. */
+  conventionsDir?: string;
 }
 
 const NAME_PATTERN = /^[A-Za-z0-9_.-]{1,100}$/;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+const OPEN_API_PATHS = new Set(['/api/login', '/api/logout', '/api/session']);
 
 function hostWithoutPort(host: string): string {
   return host.startsWith('[') ? host.slice(0, host.indexOf(']') + 1) : host.split(':')[0];
@@ -52,10 +66,10 @@ function hostWithoutPort(host: string): string {
  * calls `.listen()`. Because this server can post comments to GitHub with the configured token, it
  * guards itself against other websites driving it from the user's own browser: the Host header is
  * allow-listed (DNS rebinding), cross-origin requests are rejected, and every write requires a JSON
- * body (which a plain cross-site form cannot send).
+ * body (which a plain cross-site form cannot send). With `auth` set, it also needs a login.
  */
 export function buildUiApp(options: BuildUiAppOptions): Express {
-  const { jobs } = options;
+  const { jobs, auth } = options;
   const allowedHosts = new Set((options.allowedHosts ?? []).map((h) => h.toLowerCase()));
 
   const app = express();
@@ -81,7 +95,9 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
           return;
         }
       }
-      if (!req.is('application/json')) {
+      // Checked on the header itself: req.is() reports "no match" for a request with no body at all
+      // (e.g. DELETE), and a cross-site form can never set this content type.
+      if (!(req.header('content-type') ?? '').toLowerCase().startsWith('application/json')) {
         res.status(415).json({ error: 'Send a JSON body (Content-Type: application/json).' });
         return;
       }
@@ -89,7 +105,48 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
     next();
   });
 
-  app.use(express.json({ limit: '10kb' }));
+  app.use(express.json({ limit: '100kb' }));
+
+  const isSignedIn = (req: Request): boolean => !auth || auth.verifyToken(readCookie(req.header('cookie'), SESSION_COOKIE));
+
+  app.get('/api/session', (req, res) => {
+    res.json({ authRequired: Boolean(auth), authenticated: isSignedIn(req) });
+  });
+
+  app.post('/api/login', (req, res) => {
+    if (!auth) {
+      res.json({ ok: true });
+      return;
+    }
+    const client = req.socket.remoteAddress ?? 'unknown';
+    if (auth.isBlocked(client)) {
+      res.status(429).json({ error: 'Too many wrong passwords. Wait a minute and try again.' });
+      return;
+    }
+    const password = (req.body as { password?: unknown } | undefined)?.password;
+    if (typeof password !== 'string' || !auth.checkPassword(password)) {
+      auth.recordFailure(client);
+      res.status(401).json({ error: 'Wrong password.' });
+      return;
+    }
+    const secure = auth.secureCookie ? '; Secure' : '';
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${auth.issueToken()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(auth.sessionMs / 1000)}${secure}`);
+    res.json({ ok: true });
+  });
+
+  app.post('/api/logout', (_req, res) => {
+    res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0`);
+    res.json({ ok: true });
+  });
+
+  // Everything else under /api needs a session when a password is configured.
+  app.use('/api', (req: Request, res: Response, next: NextFunction) => {
+    if (OPEN_API_PATHS.has(req.baseUrl + req.path) || isSignedIn(req)) {
+      next();
+      return;
+    }
+    res.status(401).json({ error: 'Please sign in.' });
+  });
 
   const parseRepoRef = (source: Record<string, unknown>): { owner: string; repo: string } | undefined => {
     const { owner, repo } = source;
@@ -101,10 +158,17 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
   const handle =
     (fn: (req: Request, res: Response) => Promise<void> | void) =>
     (req: Request, res: Response): void => {
-      Promise.resolve(fn(req, res)).catch(() => {
+      // Starting from a resolved promise also turns a synchronous throw into a rejection, so it is
+      // handled here instead of reaching Express's default error page (which would show a stack trace).
+      Promise.resolve().then(() => fn(req, res)).catch((err: unknown) => {
+        if (res.headersSent) return;
+        if (err instanceof ConventionError) {
+          res.status(400).json({ error: err.message });
+          return;
+        }
         // Never echo internals (a thrown error could carry request details) - the real reason is
         // logged by whatever threw it.
-        if (!res.headersSent) res.status(500).json({ error: 'Something went wrong on the server.' });
+        res.status(500).json({ error: 'Something went wrong on the server.' });
       });
     };
 
@@ -169,6 +233,88 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
     }
     res.json({ ok: true });
   });
+
+  app.post('/api/jobs/:id/feedback', (req, res) => {
+    const { index, vote } = (req.body ?? {}) as { index?: unknown; vote?: unknown };
+    const validVote = vote === 'up' || vote === 'down' || vote === null;
+    if (typeof index !== 'number' || !validVote) {
+      res.status(400).json({ error: 'index must be a number and vote must be "up", "down" or null.' });
+      return;
+    }
+    if (!jobs.setFeedback(req.params.id, index, vote as FeedbackVote | null)) {
+      res.status(404).json({ error: 'No such review or finding.' });
+      return;
+    }
+    res.json({ ok: true, summary: jobs.feedbackSummary() });
+  });
+
+  app.get('/api/feedback', (_req, res) => {
+    res.json(jobs.feedbackSummary());
+  });
+
+  app.get('/api/auto', (_req, res) => {
+    res.json(options.auto ? { available: true, ...options.auto.status() } : { available: false });
+  });
+
+  app.post('/api/auto', (req, res) => {
+    if (!options.auto) {
+      res.status(404).json({ error: 'Auto-review is not available.' });
+      return;
+    }
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const next: Record<string, unknown> = {};
+    for (const key of ['enabled', 'autoPost', 'owner', 'repo']) if (key in body) next[key] = body[key];
+    const error = options.auto.configure(next);
+    if (error) {
+      res.status(400).json({ error });
+      return;
+    }
+    res.json({ available: true, ...options.auto.status() });
+  });
+
+  const conventionsDir = options.conventionsDir;
+
+  app.get(
+    '/api/conventions',
+    handle((_req, res) => {
+      if (!conventionsDir) {
+        res.status(404).json({ error: 'The rules editor is not available.' });
+        return;
+      }
+      res.json({ docs: listConventionDocs(conventionsDir) });
+    })
+  );
+
+  app.put(
+    '/api/conventions/:name',
+    handle((req, res) => {
+      if (!conventionsDir) {
+        res.status(404).json({ error: 'The rules editor is not available.' });
+        return;
+      }
+      const content = (req.body as { content?: unknown } | undefined)?.content;
+      if (typeof content !== 'string') {
+        res.status(400).json({ error: 'content must be text.' });
+        return;
+      }
+      res.json(saveConventionDoc(conventionsDir, String(req.params.name), content));
+    })
+  );
+
+  app.delete(
+    '/api/conventions/:name',
+    handle((req, res) => {
+      if (!conventionsDir) {
+        res.status(404).json({ error: 'The rules editor is not available.' });
+        return;
+      }
+      if (!deleteConventionDoc(conventionsDir, String(req.params.name))) {
+        res.status(404).json({ error: 'No such document.' });
+        return;
+      }
+      res.json({ ok: true });
+    })
+  );
 
   app.use(express.static(options.publicDir));
 
