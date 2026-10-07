@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PR Review Assistant</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --surface: #ffffff; --text: #1c2330; --muted: #627086; --border: #dfe3ea;
+    --accent: #2457d6; --accent-text: #ffffff; --ok: #1a7f4b; --warn: #a15c00; --bad: #c0352b;
+    --crit: #c0352b; --high: #d9622b; --med: #b8860b; --low: #4f7cac;
+    --shadow: 0 1px 2px rgba(20, 30, 50, .06), 0 4px 16px rgba(20, 30, 50, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #11151c; --surface: #1a2029; --text: #e6eaf1; --muted: #93a0b5; --border: #2a3342;
+      --accent: #6b93ff; --accent-text: #0b1020; --ok: #4cc38a; --warn: #e0a64a; --bad: #ff7a6e;
+      --crit: #ff7a6e; --high: #ff9a5c; --med: #e0b84a; --low: #7fb0e0;
+      --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 20px; }
+  h1 { font-size: 22px; margin: 0; }
+  h2 { font-size: 16px; margin: 28px 0 10px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); font-size: 13px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); } .dot.warn { background: var(--warn); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow); }
+  .bar { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+  input[type=text] { padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font: inherit; min-width: 0; width: 100%; }
+  .field { flex: 1 1 160px; }
+  button { font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); padding: 8px 14px; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .check { display: flex; align-items: center; gap: 8px; margin: 12px 0 4px; font-size: 14px; color: var(--muted); }
+  .list { display: grid; gap: 10px; }
+  .pr { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; }
+  .pr-main { flex: 1 1 320px; min-width: 0; }
+  .pr-title { font-weight: 600; overflow-wrap: anywhere; }
+  .pr-title a { color: inherit; text-decoration: none; } .pr-title a:hover { text-decoration: underline; }
+  .meta { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+  .badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid currentColor; }
+  .badge.posted { color: var(--ok); } .badge.failed { color: var(--bad); } .badge.cancelled, .badge.skipped { color: var(--muted); }
+  .badge.running, .badge.queued, .badge.awaiting_confirmation { color: var(--warn); }
+  .sev { color: #fff; border: 0; padding: 2px 8px; }
+  .sev.critical { background: var(--crit); } .sev.high { background: var(--high); } .sev.medium { background: var(--med); } .sev.low { background: var(--low); }
+  .empty, .hint { color: var(--muted); font-size: 14px; }
+  .error { color: var(--bad); }
+  .panel { margin-top: 16px; }
+  .panel-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+  .steps { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 6px; }
+  .steps li { display: flex; gap: 8px; align-items: center; color: var(--muted); }
+  .steps li.done { color: var(--text); } .steps li.active { color: var(--text); font-weight: 600; }
+  .spinner { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .finding { border-top: 1px solid var(--border); padding: 12px 0; }
+  .finding:first-child { border-top: 0; }
+  .finding h4 { margin: 4px 0; font-size: 15px; overflow-wrap: anywhere; }
+  .finding p { margin: 4px 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+  .fix { background: var(--bg); border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+  .actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
+  details { margin-top: 10px; font-size: 13px; color: var(--muted); }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0 0; }
+  a.link { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>PR Review Assistant</h1>
+    <div class="chips" id="chips" aria-live="polite"></div>
+  </header>
+
+  <section class="card" aria-label="Repository">
+    <div class="bar">
+      <div class="field"><label for="owner">Owner</label><input type="text" id="owner" autocomplete="off" spellcheck="false"></div>
+      <div class="field"><label for="repo">Repository</label><input type="text" id="repo" autocomplete="off" spellcheck="false"></div>
+      <button class="primary" id="load">Load pull requests</button>
+    </div>
+    <label class="check"><input type="checkbox" id="autopost"> Post comments to GitHub automatically (skip the preview)</label>
+  </section>
+
+  <h2>Open pull requests</h2>
+  <div class="list" id="prs"><div class="empty">Choose a repository and press “Load pull requests”.</div></div>
+
+  <section class="card panel" id="panel" hidden aria-live="polite"></section>
+
+  <h2>Recent reviews</h2>
+  <div class="list" id="jobs"><div class="empty">No reviews yet in this session.</div></div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---- tiny DOM helper. Everything dynamic goes through textContent, never innerHTML, because PR
+  // titles, branch names and review findings are untrusted text.
+  function el(tag, props) {
+    var node = document.createElement(tag);
+    props = props || {};
+    Object.keys(props).forEach(function (key) {
+      if (props[key] == null) return;
+      if (key === 'text') node.textContent = props[key];
+      else if (key === 'class') node.className = props[key];
+      else if (key === 'on') Object.keys(props.on).forEach(function (ev) { node.addEventListener(ev, props.on[ev]); });
+      else node.setAttribute(key, props[key]);
+    });
+    for (var i = 2; i < arguments.length; i++) {
+      var child = arguments[i];
+      if (child == null || child === false) continue;
+      node.appendChild(typeof child === 'string' ? document.createTextNode(child) : child);
+    }
+    return node;
+  }
+  var $ = function (id) { return document.getElementById(id); };
+
+  function api(path, options) {
+    options = options || {};
+    var init = { method: options.method || 'GET', headers: {} };
+    if (options.body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(options.body); }
+    return fetch(path, init).then(function (res) {
+      return res.json().catch(function () { return {}; }).then(function (data) {
+        if (!res.ok) throw new Error(data.error || ('Request failed (' + res.status + ')'));
+        return data;
+      });
+    });
+  }
+
+  function ago(iso) {
+    var s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+    if (s < 60) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + ' min ago';
+    if (s < 86400) return Math.round(s / 3600) + ' h ago';
+    return Math.round(s / 86400) + ' d ago';
+  }
+
+  var store = {
+    get: function (k) { try { return localStorage.getItem(k) || ''; } catch (e) { return ''; } },
+    set: function (k, v) { try { localStorage.setItem(k, v); } catch (e) { /* storage unavailable */ } }
+  };
+
+  var state = { prs: [], jobs: [], openJobId: null, loaded: null };
+  var STATUS_TEXT = { queued: 'Waiting in line', running: 'Reviewing…', awaiting_confirmation: 'Needs your decision', posted: 'Posted', cancelled: 'Discarded', skipped: 'Nothing to review', failed: 'Failed' };
+  var ACTIVE = { queued: 1, running: 1, awaiting_confirmation: 1 };
+
+  // ---- header status chips
+  function renderStatus(s) {
+    var chips = $('chips');
+    chips.textContent = '';
+    var m = s.model;
+    var modelLabel, modelClass;
+    if (m.kind === 'ollama') {
+      if (!m.reachable) { modelLabel = 'AI model: Ollama not reachable'; modelClass = 'bad'; }
+      else if (m.modelInstalled === false) { modelLabel = 'AI model: “' + m.name + '” is not installed in Ollama'; modelClass = 'warn'; }
+      else { modelLabel = 'AI model: Ollama · ' + (m.name || 'default'); modelClass = 'ok'; }
+    } else { modelLabel = 'AI model: Anthropic API' + (m.name ? ' · ' + m.name : ''); modelClass = 'ok'; }
+    chips.appendChild(el('span', { class: 'chip', title: m.baseUrl || '' }, el('span', { class: 'dot ' + modelClass }), modelLabel));
+    chips.appendChild(el('span', { class: 'chip' }, el('span', { class: 'dot ' + (s.github.configured ? 'ok' : 'bad') }),
+      s.github.configured ? 'GitHub connected' : 'GitHub token missing'));
+  }
+  function refreshStatus() {
+    return api('/api/status').then(renderStatus).catch(function () {
+      renderStatus({ model: { kind: 'ollama', reachable: false }, github: { configured: false } });
+    });
+  }
+
+  // ---- pull request list
+  function latestJobFor(prNumber) {
+    for (var i = 0; i < state.jobs.length; i++) {
+      var j = state.jobs[i];
+      if (j.pr === prNumber && state.loaded && j.owner === state.loaded.owner && j.repo === state.loaded.repo) return j;
+    }
+    return null;
+  }
+  function renderPrs() {
+    var box = $('prs');
+    box.textContent = '';
+    if (!state.loaded) { box.appendChild(el('div', { class: 'empty', text: 'Choose a repository and press “Load pull requests”.' })); return; }
+    if (state.prs.length === 0) { box.appendChild(el('div', { class: 'empty', text: 'No open pull requests in ' + state.loaded.owner + '/' + state.loaded.repo + '.' })); return; }
+    state.prs.forEach(function (pr) {
+      var job = latestJobFor(pr.number);
+      var busy = job && ACTIVE[job.status];
+      var right = el('div', { class: 'actions', style: 'margin:0' });
+      if (job) right.appendChild(el('span', { class: 'badge ' + job.status, text: STATUS_TEXT[job.status] }));
+      if (job) right.appendChild(el('button', { text: 'View', on: { click: function () { openJob(job.id); } } }));
+      right.appendChild(el('button', { class: 'primary', text: busy ? 'In progress…' : (job ? 'Review again' : 'Review'), disabled: busy ? 'disabled' : null,
+        on: { click: function () { startReview(pr); } } }));
+      box.appendChild(el('div', { class: 'card pr' },
+        el('div', { class: 'pr-main' },
+          el('div', { class: 'pr-title' }, el('a', { href: pr.url, target: '_blank', rel: 'noopener noreferrer', text: '#' + pr.number + '  ' + pr.title })),
+          el('div', { class: 'meta', text: pr.branch + ' → ' + pr.baseBranch + ' · ' + (pr.author || 'unknown') + ' · updated ' + ago(pr.updatedAt) + (pr.draft ? ' · draft' : '') })),
+        right));
+    });
+  }
+  function loadPrs() {
+    var owner = $('owner').value.trim(), repo = $('repo').value.trim();
+    if (!owner || !repo) { $('prs').textContent = ''; $('prs').appendChild(el('div', { class: 'error', text: 'Enter both the owner and the repository name.' })); return Promise.resolve(); }
+    store.set('owner', owner); store.set('repo', repo);
+    $('load').disabled = true;
+    return api('/api/prs?owner=' + encodeURIComponent(owner) + '&repo=' + encodeURIComponent(repo)).then(function (data) {
+      state.loaded = { owner: data.owner, repo: data.repo }; state.prs = data.pullRequests; renderPrs();
+    }).catch(function (err) {
+      state.loaded = null; state.prs = []; $('prs').textContent = ''; $('prs').appendChild(el('div', { class: 'error', text: err.message }));
+    }).then(function () { $('load').disabled = false; });
+  }
+
+  // ---- reviews
+  function startReview(pr) {
+    api('/api/jobs', { method: 'POST', body: { owner: state.loaded.owner, repo: state.loaded.repo, pr: pr.number, autoPost: $('autopost').checked } })
+      .then(function (job) { state.openJobId = job.id; return pollJobs(); })
+      .catch(function (err) { alert(err.message); });
+  }
+  function openJob(id) { state.openJobId = id; renderPanel(); $('panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+
+  function friendlyError(msg) {
+    if (/connection error|ECONNREFUSED|fetch failed/i.test(msg)) return msg + '  — The AI model could not be reached. Is Ollama running?';
+    if (/403|not accessible/i.test(msg)) return msg + '  — GitHub refused the request. Check the token’s permissions (Pull requests: read and write).';
+    return msg;
+  }
+
+  function stepsFor(job) {
+    var text = job.log.map(function (l) { return l.message; }).join('\n');
+    // Only called while a job is queued or running.
+    var readDone = /Filtered changed files/.test(text);
+    return {
+      steps: [
+        { label: 'Reading the pull request from GitHub', done: readDone },
+        { label: 'AI is reviewing the changes (a local model can take a few minutes)', done: false }
+      ],
+      active: readDone ? 1 : 0
+    };
+  }
+
+  function findingNode(issue) {
+    return el('div', { class: 'finding' },
+      el('div', null, el('span', { class: 'badge sev ' + issue.severity, text: issue.severity.toUpperCase() }), ' ',
+        el('span', { class: 'meta', text: issue.file + ':' + issue.line })),
+      el('h4', { text: issue.title }),
+      el('p', { text: issue.explanation }),
+      el('div', { class: 'fix' }, el('strong', { text: 'Suggested fix: ' }), issue.suggestedFix));
+  }
+
+  function renderPanel() {
+    var panel = $('panel');
+    var job = state.jobs.filter(function (j) { return j.id === state.openJobId; })[0];
+    if (!job) { panel.hidden = true; return; }
+    panel.hidden = false;
+    panel.textContent = '';
+    panel.appendChild(el('div', { class: 'panel-head' },
+      el('strong', { text: job.owner + '/' + job.repo + ' · PR #' + job.pr }),
+      el('span', { class: 'badge ' + job.status, text: STATUS_TEXT[job.status] })));
+
+    if (job.status === 'queued' || job.status === 'running') {
+      var s = stepsFor(job);
+      var list = el('ul', { class: 'steps' });
+      s.steps.forEach(function (st, i) {
+        var cls = st.done ? 'done' : (i === s.active ? 'active' : '');
+        list.appendChild(el('li', { class: cls }, st.done ? '✓' : (i === s.active ? el('span', { class: 'spinner' }) : '○'), st.label));
+      });
+      panel.appendChild(list);
+      if (job.status === 'queued') panel.appendChild(el('p', { class: 'hint', text: 'Another review is running; this one starts right after it.' }));
+    }
+
+    if (job.status === 'awaiting_confirmation' || (job.preview && (job.status === 'posted' || job.status === 'cancelled'))) {
+      var p = job.preview;
+      var total = p.inlineFindings.length + p.summaryOnlyFindings.length;
+      panel.appendChild(el('p', { text: p.summary }));
+      if (total === 0) panel.appendChild(el('p', { class: 'hint', text: 'No new findings to post.' }));
+      p.inlineFindings.concat(p.summaryOnlyFindings).forEach(function (i) { panel.appendChild(findingNode(i)); });
+      if (job.status === 'awaiting_confirmation') {
+        panel.appendChild(el('div', { class: 'actions' },
+          el('button', { class: 'primary', text: 'Post to GitHub', on: { click: function () { decide(job, true); } } }),
+          el('button', { text: 'Discard', on: { click: function () { decide(job, false); } } })));
+        panel.appendChild(el('p', { class: 'hint', text: 'Nothing is posted until you press “Post to GitHub”.' }));
+      }
+    }
+
+    if (job.status === 'posted' && job.outcome) {
+      panel.appendChild(el('p', null, 'Review posted: ', el('a', { class: 'link', href: job.outcome.reviewUrl, target: '_blank', rel: 'noopener noreferrer', text: 'open on GitHub' })));
+    }
+    if (job.status === 'skipped' && job.outcome) {
+      panel.appendChild(el('p', { class: 'hint', text: job.outcome.reason === 'all_findings_already_posted' ? 'Every finding was already posted in an earlier review.' : 'There were no reviewable files in this pull request.' }));
+    }
+    if (job.status === 'cancelled') panel.appendChild(el('p', { class: 'hint', text: 'Discarded — nothing was posted to GitHub.' }));
+    if (job.status === 'failed') panel.appendChild(el('p', { class: 'error', text: friendlyError(job.error || 'The review failed.') }));
+
+    if (job.log.length) {
+      panel.appendChild(el('details', null, el('summary', { text: 'Technical details' }),
+        el('pre', { text: job.log.map(function (l) { return l.level.toUpperCase() + '  ' + l.message; }).join('\n') })));
+    }
+  }
+
+  function decide(job, post) {
+    api('/api/jobs/' + encodeURIComponent(job.id) + '/confirm', { method: 'POST', body: { post: post } })
+      .then(pollJobs).catch(function (err) { alert(err.message); pollJobs(); });
+  }
+
+  function renderJobs() {
+    var box = $('jobs');
+    box.textContent = '';
+    if (state.jobs.length === 0) { box.appendChild(el('div', { class: 'empty', text: 'No reviews yet in this session.' })); return; }
+    state.jobs.slice(0, 15).forEach(function (job) {
+      box.appendChild(el('div', { class: 'card pr' },
+        el('div', { class: 'pr-main' },
+          el('div', { class: 'pr-title', text: job.owner + '/' + job.repo + ' · PR #' + job.pr }),
+          el('div', { class: 'meta', text: 'started ' + ago(job.createdAt) })),
+        el('div', { class: 'actions', style: 'margin:0' },
+          el('span', { class: 'badge ' + job.status, text: STATUS_TEXT[job.status] }),
+          el('button', { text: 'View', on: { click: function () { openJob(job.id); } } }))));
+    });
+  }
+
+  var timer = null;
+  function pollJobs() {
+    return api('/api/jobs').then(function (data) {
+      state.jobs = data.jobs; renderJobs(); renderPrs(); renderPanel();
+      var anyActive = state.jobs.some(function (j) { return ACTIVE[j.status]; });
+      clearTimeout(timer);
+      if (anyActive) timer = setTimeout(pollJobs, 2000);
+    }).catch(function () { clearTimeout(timer); timer = setTimeout(pollJobs, 5000); });
+  }
+
+  $('owner').value = store.get('owner');
+  $('repo').value = store.get('repo');
+  $('load').addEventListener('click', loadPrs);
+  [$('owner'), $('repo')].forEach(function (i) { i.addEventListener('keydown', function (e) { if (e.key === 'Enter') loadPrs(); }); });
+
+  refreshStatus();
+  setInterval(refreshStatus, 15000);
+  api('/api/status').then(function (s) {
+    if (!$('owner').value && s.github.owner) $('owner').value = s.github.owner;
+    if (!$('repo').value && s.github.repo) $('repo').value = s.github.repo;
+    if ($('owner').value && $('repo').value) return loadPrs();
+  }).catch(function () { /* status chip already shows the problem */ }).then(pollJobs);
+})();
+</script>
+</body>
+</html>
