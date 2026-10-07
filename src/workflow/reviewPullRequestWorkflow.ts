@@ -16,6 +16,7 @@ import { formatIssueCommentBody } from './fingerprint.js';
 import type { RepositoryPullRequestRef } from './fingerprint.js';
 import { detectDuplicateFindings } from './duplicateDetectionService.js';
 import { findSyntaxErrors as defaultFindSyntaxErrors, isSyntaxCheckable } from './syntaxCheck.js';
+import { findIfsIssues as defaultFindIfsIssues, isIfsFile } from './ifsCheck.js';
 import { consoleLogger, toSafeLogFields } from './logger.js';
 import type { WorkflowLogger } from './logger.js';
 
@@ -66,6 +67,8 @@ export interface ReviewPullRequestDeps {
   /** Used to fetch each changed JavaScript file at the PR's head commit for the deterministic syntax check. */
   getFileContent: typeof githubGetFileContent;
   findSyntaxErrors: typeof defaultFindSyntaxErrors;
+  /** Deterministic IFS Cloud rule checks (file names, comment tags, @Overtake, naming). */
+  findIfsIssues: typeof defaultFindIfsIssues;
   /** The bot's own login for dedup filtering - defaults to PR_REVIEW_BOT_LOGIN via loadConfig(). */
   knownBotLogin?: string;
   /**
@@ -103,6 +106,7 @@ function defaultDeps(): ReviewPullRequestDeps {
     runClaudeReview,
     getFileContent: githubGetFileContent,
     findSyntaxErrors: defaultFindSyntaxErrors,
+    findIfsIssues: defaultFindIfsIssues,
     knownBotLogin: resolveDefaultBotLogin(),
     confirmBeforePosting: () => true,
     logger: consoleLogger,
@@ -203,14 +207,32 @@ export async function reviewPullRequest(
       return { status: 'failed', stage: 'claude', reason: safe.message };
     }
 
-    // Deterministic syntax check (node --check) on changed JavaScript files, merged in as critical
-    // findings. Best effort: any failure fetching a file is logged and skipped, never fatal.
+    // Deterministic checks, merged in ahead of the model's findings: a syntax check (node --check)
+    // on changed JavaScript files, and the IFS Cloud rules a program can verify exactly. Both are
+    // best effort: a failure fetching a file is logged and skipped, never fatal.
     const syntaxIssues = await collectSyntaxIssues(deps, ref, pr.head.sha, reviewableFiles, log);
-    if (syntaxIssues.length > 0) {
-      log.info(`Syntax check found ${syntaxIssues.length} file(s) that do not parse`, {
-        files: syntaxIssues.map((i) => i.file),
+    const ifsIssues = await collectIfsIssues(deps, ref, pr.head.sha, reviewableFiles, log);
+    if (syntaxIssues.length > 0 || ifsIssues.length > 0) {
+      log.info('Deterministic checks found problems', {
+        syntaxFiles: syntaxIssues.map((i) => i.file),
+        ifsFindings: ifsIssues.length,
       });
-      claudeResult = { ...claudeResult, issues: [...syntaxIssues, ...claudeResult.issues] };
+      // The model never saw these findings, so its own summary can contradict them (e.g. "No
+      // issues found") - lead with the deterministic results, and drop the model's summary
+      // entirely when it found nothing else to say.
+      const notes: string[] = [];
+      if (syntaxIssues.length > 0) {
+        notes.push(
+          `Syntax check: ${syntaxIssues.length} changed file(s) do not parse (${syntaxIssues.map((i) => i.file).join(', ')}).`
+        );
+      }
+      if (ifsIssues.length > 0) {
+        notes.push(`IFS rule checks: ${ifsIssues.length} finding(s) from the documented customization rules.`);
+      }
+      claudeResult = {
+        summary: claudeResult.issues.length === 0 ? notes.join(' ') : `${notes.join(' ')} ${claudeResult.summary}`,
+        issues: [...syntaxIssues, ...ifsIssues, ...claudeResult.issues],
+      };
     }
 
     // --- 9: map + validate every finding against the actual diff-line-mapping system ---
@@ -356,6 +378,37 @@ async function collectSyntaxIssues(
     return deps.findSyntaxErrors(sources);
   } catch (err) {
     log.warn('Syntax check failed unexpectedly - continuing without it', toSafeLogFields(err));
+    return [];
+  }
+}
+
+async function collectIfsIssues(
+  deps: ReviewPullRequestDeps,
+  ref: { owner: string; repo: string },
+  headSha: string,
+  files: ChangedFile[],
+  log: WorkflowLogger
+): Promise<ReviewIssue[]> {
+  const candidates = files.filter((f) => f.status !== 'removed' && isIfsFile(f.filename)).slice(0, MAX_SYNTAX_CHECK_FILES);
+  if (candidates.length === 0) return [];
+
+  const inputs: Parameters<typeof defaultFindIfsIssues>[0] = [];
+  for (const file of candidates) {
+    let content: string | undefined;
+    try {
+      const result = await deps.getFileContent({ owner: ref.owner, repo: ref.repo, path: file.filename, ref: headSha });
+      if ('content' in result && typeof result.content === 'string') content = result.content;
+    } catch (err) {
+      // Without the full file the tag-pairing checks are skipped for it; the patch checks still run.
+      log.warn(`Could not fetch ${file.filename} for the IFS checks - using the diff only`, toSafeLogFields(err));
+    }
+    inputs.push({ filename: file.filename, status: file.status, patch: file.patch, content });
+  }
+
+  try {
+    return deps.findIfsIssues(inputs);
+  } catch (err) {
+    log.warn('IFS checks failed unexpectedly - continuing without them', toSafeLogFields(err));
     return [];
   }
 }

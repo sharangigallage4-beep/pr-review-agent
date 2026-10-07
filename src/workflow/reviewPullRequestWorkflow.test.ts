@@ -87,6 +87,7 @@ function baseDeps(overrides: Partial<ReviewPullRequestDeps> = {}): Partial<Revie
       throw new Error('getFileContent not stubbed');
     },
     findSyntaxErrors: () => [],
+    findIfsIssues: () => [],
     knownBotLogin: 'pr-review-bot',
     logger: silentLogger,
     ...overrides,
@@ -724,5 +725,66 @@ describe('reviewPullRequest syntax check', () => {
       })
     );
     assert.notEqual(outcome.status, 'failed');
+  });
+});
+
+describe('reviewPullRequest IFS rule checks', () => {
+  test('merges IFS findings ahead of the model findings and leads the summary with them', async () => {
+    let createdBody: string | undefined;
+    let seen: Array<{ filename: string; content?: string }> = [];
+    const ifsFile = { ...reviewableFile, filename: 'CustomerHandling-Cust.projection' };
+    const outcome = await reviewPullRequest(
+      'acme',
+      'widgets',
+      42,
+      baseDeps({
+        getChangedFiles: async ({ page, perPage }) => changedFilesPage([ifsFile], 1, page ?? 1, perPage ?? 100),
+        getFileContent: async () => ({ path: 'x', ref: 'sha', sha: 's', size: 1, content: 'projection X;' }),
+        findIfsIssues: (files) => {
+          seen = files;
+          return [
+            {
+              severity: 'medium' as const,
+              file: 'CustomerHandling-Cust.projection',
+              line: 1,
+              title: 'BP4: @Overtake used',
+              explanation: 'Because.',
+              suggestedFix: 'Use @Override.',
+            },
+          ];
+        },
+        runClaudeReview: async () => ({ summary: 'No issues found - the change looks correct.', issues: [] }),
+        createPullRequestReview: async ({ body }) => {
+          createdBody = body;
+          return { id: 1, url: 'u', state: 'COMMENTED', submitted_at: 't', comments_count: 0 };
+        },
+      })
+    );
+    assert.deepEqual(seen.map((f) => [f.filename, f.content]), [['CustomerHandling-Cust.projection', 'projection X;']]);
+    assert.equal(outcome.status === 'posted' ? outcome.totalFindings : -1, 1);
+    assert.match(String(createdBody), /IFS rule checks: 1 finding/);
+    assert.equal(String(createdBody).includes('looks correct'), false);
+  });
+
+  test('a file that cannot be fetched still gets the diff-only checks', async () => {
+    let seen: Array<{ filename: string; content?: string }> = [];
+    const ifsFile = { ...reviewableFile, filename: 'CustomerHandling-Cust.projection' };
+    await reviewPullRequest(
+      'acme',
+      'widgets',
+      42,
+      baseDeps({
+        getChangedFiles: async ({ page, perPage }) => changedFilesPage([ifsFile], 1, page ?? 1, perPage ?? 100),
+        getFileContent: async () => {
+          throw new Error('404');
+        },
+        findIfsIssues: (files) => {
+          seen = files;
+          return [];
+        },
+        runClaudeReview: async () => ({ summary: 'ok', issues: [] }),
+      })
+    );
+    assert.deepEqual(seen.map((f) => [f.filename, f.content]), [['CustomerHandling-Cust.projection', undefined]]);
   });
 });
