@@ -1,3 +1,4 @@
+<!-- applies-to: .js, .mjs, .cjs, .ts -->
 # Team coding conventions (Node.js 18+ / ESM / TypeScript strict)
 
 When a changed line breaks a rule below, report it and name the rule number (e.g. "Rule N3").

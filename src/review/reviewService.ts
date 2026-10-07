@@ -40,7 +40,9 @@ export function normalizeRawReviewResult(raw: unknown): unknown {
  * independent of GitHub API calls or the MCP transport.
  */
 export async function reviewPullRequest(input: ReviewInput, deps: ReviewServiceDeps = {}): Promise<ReviewResult> {
-  const systemPrompt = buildSystemPrompt(deps.conventions ?? loadConventions());
+  const systemPrompt = buildSystemPrompt(
+    deps.conventions ?? loadConventions(undefined, input.changedFiles.map((f) => f.filename))
+  );
   const userMessage = buildUserMessage(input);
   const requestReview = deps.requestReview ?? defaultRequestReview;
 

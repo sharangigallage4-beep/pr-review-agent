@@ -43,6 +43,51 @@ describe('loadConventions', () => {
   });
 });
 
+describe('loadConventions applies-to filtering', () => {
+  const files = {
+    'ifs.md': '<!-- applies-to: .projection, .client -->\n# IFS rules',
+    'node.md': '<!-- applies-to: .js, .ts -->\n# Node rules',
+    'always.md': '# Always rules',
+  };
+
+  test('includes only the docs matching the changed file extensions', () => {
+    withDir(files, (dir) => {
+      const ifs = loadConventions(dir, ['src/CFooHandling-Cust.projection']);
+      assert.match(ifs, /IFS rules/);
+      assert.match(ifs, /Always rules/);
+      assert.equal(ifs.includes('Node rules'), false);
+
+      const node = loadConventions(dir, ['src/a.JS']);
+      assert.match(node, /Node rules/);
+      assert.equal(node.includes('IFS rules'), false);
+    });
+  });
+
+  test('includes docs for every stack present in a mixed PR', () => {
+    withDir(files, (dir) => {
+      const mixed = loadConventions(dir, ['a.ts', 'b.client']);
+      assert.match(mixed, /IFS rules/);
+      assert.match(mixed, /Node rules/);
+    });
+  });
+
+  test('does not filter when no filenames are given, and strips the applies-to marker', () => {
+    withDir(files, (dir) => {
+      const all = loadConventions(dir);
+      assert.match(all, /IFS rules/);
+      assert.match(all, /Node rules/);
+      assert.equal(all.includes('applies-to'), false);
+    });
+  });
+
+  test('a PR with only unrelated files gets just the unscoped docs', () => {
+    withDir(files, (dir) => {
+      const result = loadConventions(dir, ['README.md']);
+      assert.equal(result, '# Always rules');
+    });
+  });
+});
+
 describe('buildSystemPrompt with conventions', () => {
   test('is unchanged when there are no conventions', () => {
     assert.equal(buildSystemPrompt(''), buildSystemPrompt());
