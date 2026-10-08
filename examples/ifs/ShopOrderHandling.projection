@@ -1,0 +1,18 @@
+-- ----------------------------------------------------------------------------
+--
+--  Logical unit: ShopOrderHandling
+--  Component:    SHPORD
+--
+--  Example file for the review agent (synthetic - not real IFS code).
+--
+-- ----------------------------------------------------------------------------
+projection ShopOrderHandling;
+component SHPORD;
+layer Core;
+
+entityset ShopOrders for ShopOrder;
+
+entity ShopOrder {
+   attribute OrderNo Text;
+   attribute Contract Text;
+}
