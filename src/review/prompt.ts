@@ -80,6 +80,8 @@ cite the rule number in the explanation, and use the severity the rule specifies
 Method: go through the added lines one at a time and check each against EVERY rule below, not just the
 "first one that matches". Report each violation as its own finding, even when several are on the same
 line. Judge only lines added or changed in the diff. Do not invent rules that are not written here.
+Rules marked "[checked by code]" are verified by a separate program that reports them itself, so NEVER
+report those yourself - not even when you think they are broken; report only the unmarked rules.
 
 ${conventions.trim()}`;
 }

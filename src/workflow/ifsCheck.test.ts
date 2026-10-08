@@ -47,6 +47,13 @@ describe('file names (BP1, NM9, NM11)', () => {
     assert.equal(issue.severity, 'high');
   });
 
+  test('the core-file finding is anchored on the first changed line, so it can be an inline comment', () => {
+    const patch = '@@ -10,2 +10,3 @@\n keep\n keep\n+added';
+    const issue = findIfsIssues([{ filename: 'ShopOrderHandling.projection', status: 'modified', patch }])[0];
+    assert.equal(issue.title.slice(0, 3), 'BP1');
+    assert.equal(issue.line, 12);
+  });
+
   test('-Cust files and C-prefixed files are fine to modify', () => {
     for (const filename of ['ShopOrderHandling-Cust.projection', 'CCrmCustomerHandling.projection', 'ShopOrder-Cust.plsvc']) {
       assert.deepEqual(titles([{ filename, status: 'modified', patch: null }]), [], filename);

@@ -94,7 +94,7 @@ function issue(severity: Severity, file: string, line: number, title: string, ex
   return { severity, file, line, title, explanation, suggestedFix };
 }
 
-function checkFileName(file: IfsFile): ReviewIssue[] {
+function checkFileName(file: IfsFile, firstAddedLine: number): ReviewIssue[] {
   const name = baseName(file.filename);
   const isModelFile = /\.(projection|client|fragment)$/i.test(name);
   if (name.includes('-Cust') || hasCPrefix(name)) {
@@ -108,7 +108,7 @@ function checkFileName(file: IfsFile): ReviewIssue[] {
   }
   if (file.status === 'modified') {
     return [
-      issue('high', file.filename, 1, 'BP1: core file changed', `"${name}" has neither the "-Cust" suffix nor a C prefix, so this looks like a core file. Core files must never be changed; customizations belong in a customization-layer file whose name contains -Cust.`, `Move the change into ${name.replace(/(\.[a-z]+)$/i, '-Cust$1')}.`),
+      issue('high', file.filename, firstAddedLine, 'BP1: core file changed', `"${name}" has neither the "-Cust" suffix nor a C prefix, so this looks like a core file. Core files must never be changed; customizations belong in a customization-layer file whose name contains -Cust.`, `Move the change into ${name.replace(/(\.[a-z]+)$/i, '-Cust$1')}.`),
     ];
   }
   if (file.status === 'added' && isModelFile) {
@@ -271,7 +271,7 @@ export function findIfsIssues(files: IfsFile[]): ReviewIssue[] {
     if (!isIfsFile(file.filename) || file.status === 'removed') continue;
     const patchLines = file.patch ? parsePatchLines(file.patch) : [];
 
-    issues.push(...checkFileName(file));
+    issues.push(...checkFileName(file, patchLines.find((l) => l.added)?.n ?? 1));
     const tags = checkTags(file, patchLines);
     issues.push(...tags.issues);
     issues.push(...checkAddedLines(file, patchLines));

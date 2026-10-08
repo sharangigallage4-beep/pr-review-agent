@@ -94,6 +94,12 @@ describe('buildSystemPrompt with conventions', () => {
     assert.equal(buildSystemPrompt('   ').includes('TEAM CODING CONVENTIONS'), false);
   });
 
+  test('tells the model never to report rules marked as checked by code', () => {
+    const prompt = buildSystemPrompt('- X1. [checked by code] A rule.');
+    assert.match(prompt, /\[checked by code\]/);
+    assert.match(prompt, /NEVER\s+report those yourself/);
+  });
+
   test('appends the conventions and says they override the style-nitpick rule', () => {
     const prompt = buildSystemPrompt('- N1. Use camelCase.');
     assert.match(prompt, /TEAM CODING CONVENTIONS/);
