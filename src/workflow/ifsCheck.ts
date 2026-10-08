@@ -56,6 +56,10 @@ export function parsePatchLines(patch: string): Line[] {
 const TAG_LINE = /^\s*(\/\/|--)\s*\((\+|-|-\/\+)\)/;
 const TAG_STRICT =
   /^\s*(\/\/|--)\((\+|-|-\/\+)\)\s*(\d{6})\s+(\S+)\s+(M-[A-Za-z0-9]+-[A-Za-z0-9]+-\d+-\d+)\s*\((start|finish)\)\s*$/i;
+// Real customer code mostly uses an older, looser tag style - "--(+) 260522 12gDilshW M122 (Start)",
+// "M-128", "M092.D1", "(START)" - than the documented M-[CRIM-ID]-[JIRA-ID]-[N] one. Those tags still
+// open and close blocks correctly, so they are accepted for pairing and reported once per file.
+const TAG_LOOSE = /^\s*(\/\/|--)\s*\((\+|-|-\/\+)\)\s*(\d{6})\s+(\S+)\s+(\S+)\s*\((start|finish)\)\s*$/i;
 const COMMENT_OR_BLANK = /^\s*($|\/\/|--|\/\*|\*)/;
 const OVERRIDE_MARKER = /^\s*@(Override|Overtake)\b/i;
 const DECLARATION =
@@ -118,12 +122,19 @@ function checkFileName(file: IfsFile): ReviewIssue[] {
 interface TagInfo {
   key: string;
   phase: 'start' | 'finish';
+  /** True when the ID follows the documented M-[CRIM-ID]-[JIRA-ID]-[N] format. */
+  documented: boolean;
 }
 
 function parseTag(text: string): TagInfo | undefined {
-  const m = TAG_STRICT.exec(text);
+  const strict = TAG_STRICT.exec(text);
+  const m = strict ?? TAG_LOOSE.exec(text);
   if (!m) return undefined;
-  return { key: `${m[2]}|${m[3]}|${m[4].toLowerCase()}|${m[5].toUpperCase()}`, phase: m[6].toLowerCase() as 'start' | 'finish' };
+  return {
+    key: `${m[2]}|${m[3]}|${m[4].toLowerCase()}|${m[5].toUpperCase()}`,
+    phase: m[6].toLowerCase() as 'start' | 'finish',
+    documented: strict !== null,
+  };
 }
 
 function checkTags(file: IfsFile, patchLines: Line[]): { issues: ReviewIssue[]; insideBlock: Set<number> } {
@@ -138,6 +149,8 @@ function checkTags(file: IfsFile, patchLines: Line[]): { issues: ReviewIssue[]; 
   }
 
   const stack: Array<{ key: string; n: number; added: boolean }> = [];
+  const olderStyle: number[] = [];
+  const wrongPrefix: number[] = [];
   for (const line of lines) {
     if (!TAG_LINE.test(line.text)) {
       if (stack.length > 0) insideBlock.add(line.n);
@@ -151,9 +164,9 @@ function checkTags(file: IfsFile, patchLines: Line[]): { issues: ReviewIssue[]; 
       }
       continue;
     }
-    if (line.added && line.text.trimStart().slice(0, 2) !== expectedPrefix) {
-      issues.push(issue('low', file.filename, line.n, 'CM4: wrong comment prefix in tag', `Tags in ${extensionOf(file.filename)} files start with "${expectedPrefix}".`, `Start this tag line with ${expectedPrefix}.`));
-    }
+    if (line.added && line.text.trimStart().slice(0, 2) !== expectedPrefix) wrongPrefix.push(line.n);
+
+    if (line.added && !tag.documented) olderStyle.push(line.n);
 
     if (tag.phase === 'start') {
       stack.push({ key: tag.key, n: line.n, added: line.added });
@@ -165,6 +178,12 @@ function checkTags(file: IfsFile, patchLines: Line[]): { issues: ReviewIssue[]; 
         issues.push(issue('medium', file.filename, line.n, 'CM7: finish tag does not match its start tag', `The start tag on line ${open.n} and this finish tag must repeat the same change type, date, sign and ID.`, 'Make the finish tag identical to the start tag (apart from start/finish).'));
       }
     }
+  }
+  if (wrongPrefix.length > 0) {
+    issues.push(issue('low', file.filename, wrongPrefix[0], 'CM4: wrong comment prefix in tags', `${wrongPrefix.length} added tag line(s) do not start with "${expectedPrefix}", which is what tags in ${extensionOf(file.filename)} files use.`, `Start these tag lines with ${expectedPrefix}.`));
+  }
+  if (olderStyle.length > 0) {
+    issues.push(issue('low', file.filename, olderStyle[0], 'CM3: tags do not use the documented ID format', `${olderStyle.length} added tag line(s) use an older style of ID (for example "M122 (Start)") instead of the documented //(+) [YYMMDD] [Sign] M-[CRIM-ID]-[JIRA-ID]-[N](start|finish). They still open and close their blocks correctly.`, 'Use the documented ID format for new tags, e.g. //(+)230203 damilk M-M001-LPS-2345-1(start).'));
   }
   if (file.content !== undefined) {
     for (const open of stack) {

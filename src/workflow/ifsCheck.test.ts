@@ -99,9 +99,21 @@ describe('comment tags (CM3, CM4, CM7)', () => {
     assert.ok(titles([added('CFooHandling.projection', ['-- Logical unit: X', FINISH])]).some((t) => /without a start/.test(t)));
   });
 
-  test('a malformed tag is reported, a legacy-looking tag line counts as malformed too', () => {
-    const t = titles([added('CFooHandling.projection', ['-- Logical unit: X', '//(+) 191017 SAJILK C_DIS502-11(START)'])]);
+  test('an older-style tag still pairs up, and is reported once per file, not once per line', () => {
+    const lines = ['-- Logical unit: X', '//(+) 191017 SAJILK C_DIS502-11(START)', 'attribute CFoo Text;', '//(+) 191017 SAJILK C_DIS502-11(FINISH)', '//(+) 191018 SAJILK C_DIS502-12(START)', '//(+) 191018 SAJILK C_DIS502-12(FINISH)'];
+    const t = titles([added('CFooHandling.projection', lines)]);
+    assert.equal(t.filter((x) => /documented ID format/.test(x)).length, 1);
+    assert.equal(t.some((x) => /never closed|without a start|does not match/.test(x)), false, 'the blocks are paired correctly');
+  });
+
+  test('a tag that cannot be read at all is reported as malformed', () => {
+    const t = titles([added('CFooHandling.projection', ['-- Logical unit: X', '//(+) hello there'])]);
     assert.ok(t.some((x) => /malformed/.test(x)));
+  });
+
+  test('older-style tags with mismatching IDs are still caught', () => {
+    const lines = ['-- Logical unit: X', '--(+) 070926 12gUpuluL M126 (Start)', 'x', '--(+) 070926 12gUpuluL M127 (Finish)'];
+    assert.ok(titles([added('Foo-Cust.plsql', lines)]).some((x) => x.startsWith('CM7')));
   });
 
   test('tags use // in model files and -- in PL/SQL files (CM4)', () => {

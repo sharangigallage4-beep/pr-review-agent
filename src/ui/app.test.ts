@@ -2,7 +2,7 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import type { Server } from 'node:http';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { buildUiApp } from './app.js';
@@ -22,9 +22,18 @@ describe('review UI app', () => {
   let base: string;
   let publicDir: string;
   let started: Array<{ owner: string; repo: string; pr: number }>;
+  let localDir: string;
+  let versionCalls: Array<{ newFiles: string[]; oldFiles: string[] | undefined; label: string; useAi: boolean }>;
 
   before(async () => {
     publicDir = mkdtempSync(path.join(tmpdir(), 'ui-public-'));
+    localDir = mkdtempSync(path.join(tmpdir(), 'ui-local-'));
+    mkdirSync(path.join(localDir, 'v2'));
+    mkdirSync(path.join(localDir, 'v1'));
+    writeFileSync(path.join(localDir, 'v2', 'a.plsql'), 'new code');
+    writeFileSync(path.join(localDir, 'v1', 'a.plsql'), 'old code');
+    writeFileSync(path.join(localDir, 'notes.txt'), 'not offered');
+    versionCalls = [];
     writeFileSync(path.join(publicDir, 'index.html'), '<h1>hello</h1>');
     started = [];
     const jobs = new JobManager({
@@ -42,6 +51,11 @@ describe('review UI app', () => {
         return [{ number: 1, title: 'T', author: 'a', branch: 'b', baseBranch: 'main', updatedAt: '2026-01-01T00:00:00Z', url: 'u', draft: false, headSha: 'abc123' }];
       },
       getStatus: async () => ({ github: { configured: true, owner: 'acme', repo: 'widgets' }, model: { kind: 'ollama', reachable: true } }),
+      localInputDir: localDir,
+      versionReview: (async (input: { newFiles: Map<string, Buffer>; oldFiles?: Map<string, Buffer>; label: string; useAi: boolean }) => {
+        versionCalls.push({ newFiles: [...input.newFiles.keys()], oldFiles: input.oldFiles && [...input.oldFiles.keys()], label: input.label, useAi: input.useAi });
+        return { summary: 'compared', findings: [{ severity: 'high', file: 'a.plsql', line: 1, title: 'BP1: x', explanation: 'e', suggestedFix: 'f' }] };
+      }) as never,
     });
     server = app.listen(0, '127.0.0.1');
     await new Promise((r) => server.once('listening', r));
@@ -51,6 +65,7 @@ describe('review UI app', () => {
   after(async () => {
     server.close();
     rmSync(publicDir, { recursive: true, force: true });
+    rmSync(localDir, { recursive: true, force: true });
   });
 
   const post = (p: string, body: unknown, headers: Record<string, string> = {}) =>
@@ -95,6 +110,47 @@ describe('review UI app', () => {
     assert.equal((await post('/api/jobs/nope/confirm', { post: 'yes' })).status, 400);
     assert.equal((await post('/api/jobs/nope/confirm', { post: true })).status, 409);
     assert.equal((await fetch(`${base}/api/jobs/nope`)).status, 404);
+  });
+
+  test('offers only the folders and ZIPs inside local-input', async () => {
+    const data = await body(await fetch(base + '/api/local-inputs'));
+    assert.equal(data.available, true);
+    assert.deepEqual(data.entries.map((e: { name: string }) => e.name), ['v1', 'v2']);
+  });
+
+  test('reviews two local versions and ends as a finished job with findings (nothing posted)', async () => {
+    const res = await post('/api/local-reviews', { newName: 'v2', oldName: 'v1', useAi: false });
+    assert.equal(res.status, 202);
+    const job = await body(res);
+    assert.equal(job.kind, 'local');
+    for (let i = 0; i < 100; i += 1) {
+      const current = await body(await fetch(`${base}/api/jobs/${job.id}`));
+      if (current.status === 'done') {
+        assert.equal(current.preview.inlineFindings.length, 1);
+        assert.match(current.label, /v2 \(compared with v1\)/);
+        break;
+      }
+      assert.notEqual(current.status, 'failed', current.error);
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.deepEqual(versionCalls.at(-1), { newFiles: ['a.plsql'], oldFiles: ['a.plsql'], label: 'v2 (compared with v1)', useAi: false });
+  });
+
+  test('the old version is optional, and the AI defaults to on', async () => {
+    const before = versionCalls.length;
+    const res = await post('/api/local-reviews', { newName: 'v2' });
+    assert.equal(res.status, 202);
+    for (let i = 0; i < 100 && versionCalls.length === before; i += 1) await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(versionCalls.at(-1), { newFiles: ['a.plsql'], oldFiles: undefined, label: 'v2', useAi: true });
+  });
+
+  test('rejects names that are not entries of local-input, without starting anything', async () => {
+    const before = versionCalls.length;
+    for (const bad of [{ newName: '../v2' }, { newName: 'v2/..' }, { newName: 'notes.txt' }, { newName: 'missing' }, { newName: 'v2', oldName: '../v1' }, { newName: 5 }, {}, { newName: 'v2', oldName: 'v2' }]) {
+      assert.equal((await post('/api/local-reviews', bad)).status, 400, JSON.stringify(bad));
+    }
+    await new Promise((r) => setTimeout(r, 50));
+    assert.equal(versionCalls.length, before);
   });
 
   test('refuses requests from another website (Origin mismatch)', async () => {
@@ -269,6 +325,13 @@ describe('review UI app: login, feedback, auto-review, rules editor', () => {
 
     assert.equal((await send('DELETE', '/api/conventions/my-rules.md', undefined, cookie)).status, 200);
     assert.equal((await send('DELETE', '/api/conventions/my-rules.md', undefined, cookie)).status, 404);
+  });
+
+  test('without a local-input folder configured the routes are closed, and they are behind the login', async () => {
+    assert.equal((await send('POST', '/api/local-reviews', { newName: 'x' })).status, 401);
+    const cookie = await signIn();
+    assert.equal((await send('POST', '/api/local-reviews', { newName: 'x' }, cookie)).status, 404);
+    assert.deepEqual(await body(await send('GET', '/api/local-inputs', undefined, cookie)), { available: false, entries: [] });
   });
 
   // Last on purpose: failed logins are counted per client address, so this blocks it for a minute.

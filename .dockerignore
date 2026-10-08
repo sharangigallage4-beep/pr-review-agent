@@ -9,3 +9,7 @@ dist
 .review-history.json
 .ui-auto-state.json
 .watch-state.json
+
+docs/conventions/customer-solution
+local-input
+*.zip

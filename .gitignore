@@ -6,3 +6,8 @@ dist/
 .review-history.json
 .ui-auto-state.json
 *.tmp
+
+# Customer / proprietary code placed here for local-only review - must never be committed or sent anywhere
+docs/conventions/customer-solution/
+local-input/
+*.zip

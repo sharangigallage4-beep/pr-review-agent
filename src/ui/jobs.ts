@@ -3,6 +3,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { reviewPullRequest } from '../workflow/reviewPullRequestWorkflow.js';
 import type { ReviewPreview, ReviewPullRequestOutcome } from '../workflow/reviewPullRequestWorkflow.js';
 import { consoleLogger, toSafeLogFields } from '../workflow/logger.js';
+import type { ReviewIssue } from '../review/types.js';
 
 export type JobStatus =
   | 'queued'
@@ -11,6 +12,7 @@ export type JobStatus =
   | 'posted'
   | 'cancelled'
   | 'skipped'
+  | 'done'
   | 'failed';
 
 export interface JobLogLine {
@@ -21,6 +23,10 @@ export interface JobLogLine {
 
 export interface Job {
   id: string;
+  /** 'local' = a review of folders/ZIPs on this machine (nothing to post); default 'pr'. */
+  kind?: 'pr' | 'local';
+  /** For a local review: what was reviewed, e.g. "customer-solution-new (vs old)". */
+  label?: string;
   owner: string;
   repo: string;
   pr: number;
@@ -37,6 +43,11 @@ export interface Job {
   error?: string;
   /** The user's 👍/👎 on each finding, keyed by its position in inlineFindings + summaryOnlyFindings. */
   feedback?: Record<string, FeedbackVote>;
+}
+
+export interface LocalReviewResult {
+  summary: string;
+  findings: ReviewIssue[];
 }
 
 export type FeedbackVote = 'up' | 'down';
@@ -125,6 +136,30 @@ export class JobManager {
     return job;
   }
 
+  /**
+   * Queues a review of local files (no GitHub involved). `work` does the reviewing and reports
+   * progress through `log`; its findings are kept like a PR review's, but there is nothing to post -
+   * the job simply ends as "done". It shares the queue with PR reviews: one model, one job at a time.
+   */
+  startLocal(label: string, work: (log: (message: string) => void) => Promise<LocalReviewResult>): Job {
+    const job: Job = {
+      id: randomUUID(),
+      kind: 'local',
+      label,
+      owner: 'local',
+      repo: label,
+      pr: 0,
+      autoPost: false,
+      status: 'queued',
+      createdAt: new Date().toISOString(),
+      log: [],
+    };
+    this.jobs.set(job.id, job);
+    this.save();
+    this.queue = this.queue.then(() => this.runLocal(job, work)).catch(() => undefined);
+    return job;
+  }
+
   /** Resolves the Post/Discard decision for a job waiting on the user. False if none is waiting. */
   confirm(id: string, post: boolean): boolean {
     const resolve = this.pending.get(id);
@@ -191,6 +226,22 @@ export class JobManager {
   private addLog(job: Job, level: JobLogLine['level'], message: string): void {
     job.log.push({ time: new Date().toISOString(), level, message });
     if (job.log.length > MAX_LOG_LINES) job.log.splice(0, job.log.length - MAX_LOG_LINES);
+  }
+
+  private async runLocal(job: Job, work: (log: (message: string) => void) => Promise<LocalReviewResult>): Promise<void> {
+    job.status = 'running';
+    try {
+      const result = await work((message) => {
+        this.addLog(job, 'info', message);
+        this.echo.info(message);
+      });
+      job.preview = { owner: 'local', repo: job.label ?? '', pullRequestNumber: 0, summary: result.summary, inlineFindings: result.findings, summaryOnlyFindings: [] };
+      job.status = 'done';
+    } catch (err) {
+      job.status = 'failed';
+      job.error = toSafeLogFields(err).message;
+    }
+    this.save();
   }
 
   private async run(job: Job): Promise<void> {

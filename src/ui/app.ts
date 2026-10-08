@@ -5,6 +5,8 @@ import type { FeedbackVote } from './jobs.js';
 import { SESSION_COOKIE, readCookie } from './auth.js';
 import type { Auth } from './auth.js';
 import type { AutoReviewer } from './autoReview.js';
+import { LocalInputError, listLocalInputs, loadLocalInput } from './localInput.js';
+import { runVersionReview } from './versionReview.js';
 import { ConventionError, deleteConventionDoc, listConventionDocs, saveConventionDoc } from './conventionsStore.js';
 
 export interface PullRequestSummary {
@@ -49,6 +51,10 @@ export interface BuildUiAppOptions {
   auth?: Auth;
   /** Enables the "auto-review new PRs" switch. */
   auto?: AutoReviewer;
+  /** The folder whose sub-folders and .zip files can be reviewed from the page (never any other path). */
+  localInputDir?: string;
+  /** Injectable for tests - defaults to the real version comparison and review. */
+  versionReview?: typeof runVersionReview;
   /** Folder of convention .md files (the one the reviewer loads). Enables the rules editor. */
   conventionsDir?: string;
 }
@@ -162,7 +168,7 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
       // handled here instead of reaching Express's default error page (which would show a stack trace).
       Promise.resolve().then(() => fn(req, res)).catch((err: unknown) => {
         if (res.headersSent) return;
-        if (err instanceof ConventionError) {
+        if (err instanceof ConventionError || err instanceof LocalInputError) {
           res.status(400).json({ error: err.message });
           return;
         }
@@ -247,6 +253,51 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
     }
     res.json({ ok: true, summary: jobs.feedbackSummary() });
   });
+
+  const localInputDir = options.localInputDir;
+  const versionReview = options.versionReview ?? runVersionReview;
+
+  app.get('/api/local-inputs', (_req, res) => {
+    res.json(localInputDir ? { available: true, entries: listLocalInputs(localInputDir) } : { available: false, entries: [] });
+  });
+
+  app.post(
+    '/api/local-reviews',
+    handle((req, res) => {
+      if (!localInputDir) {
+        res.status(404).json({ error: 'Reviewing local folders is not available.' });
+        return;
+      }
+      const { newName, oldName, useAi } = (req.body ?? {}) as Record<string, unknown>;
+      if (typeof newName !== 'string' || (oldName !== undefined && oldName !== null && oldName !== '' && typeof oldName !== 'string')) {
+        res.status(400).json({ error: 'Choose the new version (and optionally the old one).' });
+        return;
+      }
+      const previous = typeof oldName === 'string' && oldName !== '' ? oldName : undefined;
+      // Only names that are really entries of the local-input folder are accepted, checked now so
+      // a bad choice is an immediate error rather than a failed job later.
+      const known = new Set(listLocalInputs(localInputDir).map((e) => e.name));
+      if (!known.has(newName) || (previous !== undefined && !known.has(previous))) {
+        res.status(400).json({ error: 'Pick folders or ZIP files from the list.' });
+        return;
+      }
+      if (previous === newName) {
+        res.status(400).json({ error: 'The old and the new version are the same - pick two different ones.' });
+        return;
+      }
+      const label = previous ? `${newName} (compared with ${previous})` : newName;
+      const job = jobs.startLocal(label, async (log) => {
+        log('Loading the files');
+        const next = loadLocalInput(localInputDir, newName);
+        const prev = previous ? loadLocalInput(localInputDir, previous) : undefined;
+        return versionReview(
+          { newFiles: next.files, oldFiles: prev?.files, label, useAi: useAi !== false, notes: [...next.notes, ...(prev?.notes ?? [])] },
+          { log }
+        );
+      });
+      res.status(202).json(job);
+    })
+  );
 
   app.get('/api/feedback', (_req, res) => {
     res.json(jobs.feedbackSummary());

@@ -60,6 +60,7 @@ function main(): void {
     auth: password ? createAuth({ password, cookieSecure: process.env.PR_REVIEW_UI_COOKIE_SECURE === 'true' }) : undefined,
     auto: new AutoReviewer({ jobs, listPullRequests, stateFile: path.join(dataDir, '.ui-auto-state.json') }),
     conventionsDir: process.env.PR_REVIEW_CONVENTIONS_DIR || defaultConventionsDir(),
+    localInputDir: process.env.PR_REVIEW_LOCAL_INPUT_DIR || path.join(root, 'local-input'),
   });
 
   app.listen(port, host, () => {

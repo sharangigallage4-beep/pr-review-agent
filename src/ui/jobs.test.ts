@@ -195,3 +195,72 @@ describe('JobManager history and feedback', () => {
       assert.deepEqual(jobs.feedbackSummary(), { up: 0, down: 0, percentUp: null });
     }));
 });
+
+describe('JobManager local reviews', () => {
+  const result = { summary: 'done', findings: [{ severity: 'low' as const, file: 'a.plsql', line: 1, title: 'NM9: x', explanation: 'e', suggestedFix: 'f' }] };
+
+  test('runs the work, reports progress, and ends as done with the findings as a preview', async () => {
+    const jobs = new JobManager({ echo: silent });
+    const job = jobs.startLocal('sol (compared with old)', async (log) => {
+      log('step one');
+      return result;
+    });
+    assert.equal(job.kind, 'local');
+    await waitFor(job, (j) => j.status === 'done');
+    assert.deepEqual(job.log.map((l) => l.message), ['step one']);
+    assert.equal(job.preview?.inlineFindings.length, 1);
+    assert.equal(job.repo, 'sol (compared with old)');
+    assert.equal(jobs.confirm(job.id, true), false, 'nothing to post');
+  });
+
+  test('a failure becomes a failed job with the reason', async () => {
+    const jobs = new JobManager({ echo: silent });
+    const job = jobs.startLocal('sol', async () => {
+      throw new Error('The ZIP is damaged.');
+    });
+    await waitFor(job, (j) => j.status === 'failed');
+    assert.equal(job.error, 'The ZIP is damaged.');
+  });
+
+  test('shares the queue with PR reviews: one at a time', async () => {
+    let running = 0;
+    let max = 0;
+    const tracked = async () => {
+      running += 1;
+      max = Math.max(max, running);
+      await new Promise((r) => setTimeout(r, 20));
+      running -= 1;
+    };
+    const jobs = new JobManager({
+      runReview: (async () => {
+        await tracked();
+        return { status: 'skipped', reason: 'no_reviewable_files' };
+      }) as never,
+      echo: silent,
+    });
+    const a = jobs.start('acme', 'w', 1);
+    const b = jobs.startLocal('sol', async () => {
+      await tracked();
+      return result;
+    });
+    await waitFor(a, (j) => j.status === 'skipped');
+    await waitFor(b, (j) => j.status === 'done');
+    assert.equal(max, 1);
+  });
+
+  test('thumbs up/down work on a local review, and it survives a restart', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'local-history-'));
+    try {
+      const historyFile = path.join(dir, 'h.json');
+      const jobs = new JobManager({ echo: silent, historyFile });
+      const job = jobs.startLocal('sol', async () => result);
+      await waitFor(job, (j) => j.status === 'done');
+      assert.equal(jobs.setFeedback(job.id, 0, 'down'), true);
+      const restored = new JobManager({ echo: silent, historyFile }).get(job.id);
+      assert.equal(restored?.status, 'done');
+      assert.equal(restored?.feedback?.['0'], 'down');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
