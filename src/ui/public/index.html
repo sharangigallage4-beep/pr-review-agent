@@ -82,7 +82,7 @@
   /* ---- PR cards */
   .pr { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 14px 16px 14px 14px; border-left: 4px solid var(--border); transition: box-shadow .15s, transform .15s; }
   .pr:hover { box-shadow: var(--shadow-lift); transform: translateY(-1px); }
-  .pr.s-posted { border-left-color: var(--ok); } .pr.s-failed { border-left-color: var(--bad); }
+  .pr.s-posted, .pr.s-done { border-left-color: var(--ok); } .pr.s-failed { border-left-color: var(--bad); }
   .pr.s-running, .pr.s-queued, .pr.s-awaiting_confirmation { border-left-color: var(--warn); }
   .avatar { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 15px; flex: none; text-transform: uppercase; }
   .pr-main { flex: 1 1 220px; min-width: 0; }
@@ -95,7 +95,7 @@
   .row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
   .badge { display: inline-flex; align-items: center; gap: 6px; padding: 2px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); white-space: nowrap; }
   .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-  .badge.posted { color: var(--ok); } .badge.failed { color: var(--bad); }
+  .badge.posted, .badge.done { color: var(--ok); } .badge.failed { color: var(--bad); }
   .badge.running, .badge.queued, .badge.awaiting_confirmation { color: var(--warn); }
   .badge.running::before { animation: pulse 1.2s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: .25; } }
@@ -158,6 +158,13 @@
   .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
   .toolbar input[type=text] { flex: 1 1 220px; }
   select { padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--text); font: inherit; }
+  details.local { padding: 0; }
+  details.local > summary { padding: 14px 18px; font-weight: 600; cursor: pointer; list-style: none; color: var(--text); }
+  details.local > summary::-webkit-details-marker { display: none; }
+  details.local > summary::before { content: "▸"; display: inline-block; margin-right: 8px; color: var(--muted); transition: transform .15s; }
+  details.local[open] > summary::before { transform: rotate(90deg); }
+  details.local .inner { padding: 0 18px 16px; }
+  .field select { width: 100%; }
   .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 10px; box-shadow: var(--shadow-lift); font-size: 14px; max-width: calc(100vw - 32px); z-index: 10; }
   @media (max-width: 560px) { .banner { padding-bottom: 56px; } .row-actions { width: 100%; } }
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
@@ -198,6 +205,20 @@
     <label class="check"><input type="checkbox" id="autopost"> Post comments to GitHub automatically (skip the preview)</label>
     <div class="switch-row"><label class="check" style="margin:0"><input type="checkbox" id="autoreview"> Auto-review new pull requests and new commits</label><span id="autostatus"></span></div>
   </section>
+
+  <details class="card local" id="localcard">
+    <summary>Review local files — compare two versions (nothing leaves this computer)</summary>
+    <div class="inner">
+      <p class="hint">Put folders or ZIP files in the <strong>local-input</strong> folder of this project, then pick them here. Only the files that changed between the two versions are reviewed. Nothing is uploaded and nothing is posted to GitHub.</p>
+      <div class="bar">
+        <div class="field"><label class="lbl" for="newver">NEW VERSION (the one to check)</label><select id="newver"></select></div>
+        <div class="field"><label class="lbl" for="oldver">OLD VERSION (optional)</label><select id="oldver"></select></div>
+      </div>
+      <p class="hint" id="localhint"></p>
+      <label class="check"><input type="checkbox" id="localai" checked> Also use the AI model (much slower; the rule checks always run)</label>
+      <div class="actions"><button class="primary" id="localgo">Review changes</button><button class="ghost" id="localrefresh">Refresh list</button></div>
+    </div>
+  </details>
 
   <section class="stats" id="stats" hidden aria-label="Overview"></section>
 
@@ -313,7 +334,7 @@
   }
 
   var state = { prs: [], jobs: [], openJobId: null, loaded: null };
-  var STATUS_TEXT = { queued: 'Waiting in line', running: 'Reviewing…', awaiting_confirmation: 'Needs your decision', posted: 'Posted', cancelled: 'Discarded', skipped: 'Nothing to review', failed: 'Failed' };
+  var STATUS_TEXT = { queued: 'Waiting in line', running: 'Reviewing…', awaiting_confirmation: 'Needs your decision', posted: 'Posted', done: 'Finished', cancelled: 'Discarded', skipped: 'Nothing to review', failed: 'Failed' };
   var ACTIVE = { queued: 1, running: 1, awaiting_confirmation: 1 };
   var SEVERITIES = ['critical', 'high', 'medium', 'low'];
 
@@ -412,7 +433,7 @@
 
   function toMarkdown(job) {
     var p = job.preview, all = p.inlineFindings.concat(p.summaryOnlyFindings);
-    var lines = ['# Review of ' + job.owner + '/' + job.repo + '#' + job.pr, '', p.summary, '', '## Findings (' + all.length + ')', ''];
+    var lines = ['# Review of ' + (job.kind === 'local' ? job.label : job.owner + '/' + job.repo + '#' + job.pr), '', p.summary, '', '## Findings (' + all.length + ')', ''];
     all.forEach(function (f) {
       lines.push('### [' + f.severity.toUpperCase() + '] ' + f.title, '`' + f.file + ':' + f.line + '`', '', f.explanation, '', '**Suggested fix:** ' + f.suggestedFix, '');
     });
@@ -482,7 +503,23 @@
     return msg;
   }
 
+  function stepsForLocal(job) {
+    var text = job.log.map(function (l) { return l.message; }).join('\n');
+    var loaded = /changed file\(s\) to review/.test(text);
+    var ruled = /Rule checks found/.test(text);
+    var batch = job.log.map(function (l) { return l.message; }).filter(function (m) { return /AI is reviewing batch/.test(m); }).pop();
+    return {
+      steps: [
+        { label: 'Loading and comparing the two versions', done: loaded },
+        { label: 'Running the rule checks on every changed file', done: ruled },
+        { label: batch ? batch.replace('AI is reviewing', 'AI is reviewing') + ' (a local model can take a few minutes per batch)' : 'AI review of the changes', done: false }
+      ],
+      active: !loaded ? 0 : (!ruled ? 1 : 2)
+    };
+  }
+
   function stepsFor(job) {
+    if (job.kind === 'local') return stepsForLocal(job);
     var text = job.log.map(function (l) { return l.message; }).join('\n');
     var readDone = /Filtered changed files/.test(text);
     return {
@@ -532,7 +569,7 @@
     panel.hidden = false;
     panel.textContent = '';
     panel.appendChild(el('div', { class: 'panel-head' },
-      el('span', { class: 'panel-title', text: job.owner + '/' + job.repo + ' · PR #' + job.pr }),
+      el('span', { class: 'panel-title', text: job.kind === 'local' ? 'Local review · ' + job.label : job.owner + '/' + job.repo + ' · PR #' + job.pr }),
       el('span', { class: 'badge ' + job.status, text: STATUS_TEXT[job.status] })));
 
     if (job.status === 'queued' || job.status === 'running') {
@@ -549,7 +586,7 @@
       if (job.status === 'queued') panel.appendChild(el('p', { class: 'hint', text: 'Another review is running; this one starts right after it.' }));
     }
 
-    if (job.status === 'awaiting_confirmation' || (job.preview && (job.status === 'posted' || job.status === 'cancelled'))) {
+    if (job.status === 'awaiting_confirmation' || (job.preview && (job.status === 'posted' || job.status === 'cancelled' || job.status === 'done'))) {
       var p = job.preview;
       var all = p.inlineFindings.concat(p.summaryOnlyFindings);
       panel.appendChild(el('div', { class: 'summary', text: p.summary }));
@@ -565,6 +602,9 @@
       }
     }
 
+    if (job.status === 'done') {
+      panel.appendChild(el('p', { class: 'hint', text: 'Finished. This review ran on your computer only — nothing was uploaded or posted anywhere. Use “Copy as Markdown” to share the findings.' }));
+    }
     if (job.status === 'posted' && job.outcome) {
       panel.appendChild(el('p', null, '✓ Review posted: ', el('a', { class: 'link', href: job.outcome.reviewUrl, target: '_blank', rel: 'noopener noreferrer', text: 'open on GitHub' })));
     }
@@ -592,12 +632,41 @@
     state.jobs.slice(0, 15).forEach(function (job) {
       box.appendChild(el('div', { class: 'card pr s-' + job.status },
         el('div', { class: 'pr-main' },
-          el('div', { class: 'pr-title' }, el('span', { class: 'num', text: '#' + job.pr }), job.owner + '/' + job.repo),
+          job.kind === 'local' ? el('div', { class: 'pr-title', text: 'Local · ' + job.label }) : el('div', { class: 'pr-title' }, el('span', { class: 'num', text: '#' + job.pr }), job.owner + '/' + job.repo),
           el('div', { class: 'meta', text: 'started ' + ago(job.createdAt) })),
         el('div', { class: 'row-actions' },
           el('span', { class: 'badge ' + job.status, text: STATUS_TEXT[job.status] }),
           el('button', { class: 'ghost', text: 'View', on: { click: function () { openJob(job.id); } } }))));
     });
+  }
+
+  // ---- review local files (folders / ZIPs in the local-input folder)
+  function fillSelect(select, names, withNone) {
+    var keep = select.value;
+    select.textContent = '';
+    if (withNone) select.appendChild(el('option', { value: '', text: '— no old version (every file counts as new) —' }));
+    names.forEach(function (e) { select.appendChild(el('option', { value: e.name, text: e.name + (e.kind === 'zip' ? '  (ZIP)' : '  (folder)') })); });
+    if (keep) select.value = keep;
+  }
+  function loadLocalInputs() {
+    return api('/api/local-inputs').then(function (data) {
+      var entries = data.entries || [];
+      fillSelect($('newver'), entries, false);
+      fillSelect($('oldver'), entries, true);
+      $('localgo').disabled = entries.length === 0;
+      $('localhint').textContent = !data.available ? 'Reviewing local files is not available on this server.'
+        : (entries.length === 0 ? 'The local-input folder is empty (or missing). Create it in the project folder and put your folders or ZIP files in it, then press “Refresh list”.' : '');
+    }).catch(function () { $('localhint').textContent = 'Could not read the local-input folder.'; });
+  }
+  function startLocalReview() {
+    var newName = $('newver').value, oldName = $('oldver').value;
+    if (!newName) { toast('Pick the new version first.'); return; }
+    if (newName === oldName) { toast('The old and the new version are the same - pick two different ones.'); return; }
+    var useAi = $('localai').checked;
+    if (useAi && !window.confirm('The AI model reviews the changes in batches, which can take many minutes on a local model. Continue?\n\n(Untick “Also use the AI model” for a fast rule-checks-only review.)')) return;
+    api('/api/local-reviews', { method: 'POST', body: { newName: newName, oldName: oldName || undefined, useAi: useAi } })
+      .then(function (job) { state.openJobId = job.id; return pollJobs().then(function () { $('panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); }); })
+      .catch(function (err) { toast(err.message); });
   }
 
   var timer = null;
@@ -718,7 +787,7 @@
   function startApp() {
     showApp();
     renderPrs(); renderJobs();
-    refreshStatus(); loadAuto(); loadRules(); loadAccuracy();
+    refreshStatus(); loadAuto(); loadRules(); loadAccuracy(); loadLocalInputs();
     if (started) { pollJobs(); return; }
     started = true;
     $('owner').value = store.get('owner');
@@ -732,6 +801,9 @@
   }
 
   $('load').addEventListener('click', loadPrs);
+  $('localgo').addEventListener('click', startLocalReview);
+  $('localrefresh').addEventListener('click', loadLocalInputs);
+  $('localcard').addEventListener('toggle', function () { if ($('localcard').open) loadLocalInputs(); });
   $('filter').addEventListener('input', renderPrs);
   $('statusfilter').addEventListener('change', renderPrs);
   $('bulk').addEventListener('click', reviewAllNew);

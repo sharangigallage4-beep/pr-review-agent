@@ -677,6 +677,15 @@ findings, posted, the rules broken most often), a filter and a "not reviewed yet
 list with a **Review all not yet reviewed** button (reviews still run one at a time), elapsed time
 on a running review, **Copy as Markdown** for a review's findings, and a light/dark/auto theme.
 
+**Review local files (no GitHub):** put folders or ZIP files in `local-input/` (git-ignored, never
+committed or uploaded), then use the "Review local files" card to compare a new version with an old one
+(or review a single version, where every file counts as new). Only changed files are reviewed. The
+rule checks cover every changed file; the AI, if ticked, reviews the diffs in batches sized to the
+model's context window and a failed batch does not discard the rule-check findings. ZIPs are read in
+memory with entry-count and size limits and are never extracted to disk; the page can only pick entries
+of `local-input/`, never an arbitrary path. Nothing is posted - results stay in the page (use "Copy as
+Markdown"). `PR_REVIEW_LOCAL_INPUT_DIR` changes the folder.
+
 The server can post with your GitHub token, so it listens on `127.0.0.1` only, rejects foreign
 `Host`/`Origin` headers and non-JSON writes, and **will not start on any other address without
 `PR_REVIEW_UI_PASSWORD`**. The login is a single shared password (HttpOnly, SameSite=Strict cookie,
