@@ -158,13 +158,6 @@
   .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
   .toolbar input[type=text] { flex: 1 1 220px; }
   select { padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--text); font: inherit; }
-  details.local { padding: 0; }
-  details.local > summary { padding: 14px 18px; font-weight: 600; cursor: pointer; list-style: none; color: var(--text); }
-  details.local > summary::-webkit-details-marker { display: none; }
-  details.local > summary::before { content: "▸"; display: inline-block; margin-right: 8px; color: var(--muted); transition: transform .15s; }
-  details.local[open] > summary::before { transform: rotate(90deg); }
-  details.local .inner { padding: 0 18px 16px; }
-  .field select { width: 100%; }
   .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 10px; box-shadow: var(--shadow-lift); font-size: 14px; max-width: calc(100vw - 32px); z-index: 10; }
   @media (max-width: 560px) { .banner { padding-bottom: 56px; } .row-actions { width: 100%; } }
   @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
@@ -205,20 +198,6 @@
     <label class="check"><input type="checkbox" id="autopost"> Post comments to GitHub automatically (skip the preview)</label>
     <div class="switch-row"><label class="check" style="margin:0"><input type="checkbox" id="autoreview"> Auto-review new pull requests and new commits</label><span id="autostatus"></span></div>
   </section>
-
-  <details class="card local" id="localcard">
-    <summary>Review local files — compare two versions (nothing leaves this computer)</summary>
-    <div class="inner">
-      <p class="hint">Put folders or ZIP files in the <strong>local-input</strong> folder of this project, then pick them here. Only the files that changed between the two versions are reviewed. Nothing is uploaded and nothing is posted to GitHub.</p>
-      <div class="bar">
-        <div class="field"><label class="lbl" for="newver">NEW VERSION (the one to check)</label><select id="newver"></select></div>
-        <div class="field"><label class="lbl" for="oldver">OLD VERSION (optional)</label><select id="oldver"></select></div>
-      </div>
-      <p class="hint" id="localhint"></p>
-      <label class="check"><input type="checkbox" id="localai" checked> Also use the AI model (much slower; the rule checks always run)</label>
-      <div class="actions"><button class="primary" id="localgo">Review changes</button><button class="ghost" id="localrefresh">Refresh list</button></div>
-    </div>
-  </details>
 
   <section class="stats" id="stats" hidden aria-label="Overview"></section>
 
@@ -640,35 +619,6 @@
     });
   }
 
-  // ---- review local files (folders / ZIPs in the local-input folder)
-  function fillSelect(select, names, withNone) {
-    var keep = select.value;
-    select.textContent = '';
-    if (withNone) select.appendChild(el('option', { value: '', text: '— no old version (every file counts as new) —' }));
-    names.forEach(function (e) { select.appendChild(el('option', { value: e.name, text: e.name + (e.kind === 'zip' ? '  (ZIP)' : '  (folder)') })); });
-    if (keep) select.value = keep;
-  }
-  function loadLocalInputs() {
-    return api('/api/local-inputs').then(function (data) {
-      var entries = data.entries || [];
-      fillSelect($('newver'), entries, false);
-      fillSelect($('oldver'), entries, true);
-      $('localgo').disabled = entries.length === 0;
-      $('localhint').textContent = !data.available ? 'Reviewing local files is not available on this server.'
-        : (entries.length === 0 ? 'The local-input folder is empty (or missing). Create it in the project folder and put your folders or ZIP files in it, then press “Refresh list”.' : '');
-    }).catch(function () { $('localhint').textContent = 'Could not read the local-input folder.'; });
-  }
-  function startLocalReview() {
-    var newName = $('newver').value, oldName = $('oldver').value;
-    if (!newName) { toast('Pick the new version first.'); return; }
-    if (newName === oldName) { toast('The old and the new version are the same - pick two different ones.'); return; }
-    var useAi = $('localai').checked;
-    if (useAi && !window.confirm('The AI model reviews the changes in batches, which can take many minutes on a local model. Continue?\n\n(Untick “Also use the AI model” for a fast rule-checks-only review.)')) return;
-    api('/api/local-reviews', { method: 'POST', body: { newName: newName, oldName: oldName || undefined, useAi: useAi } })
-      .then(function (job) { state.openJobId = job.id; return pollJobs().then(function () { $('panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); }); })
-      .catch(function (err) { toast(err.message); });
-  }
-
   var timer = null;
   function pollJobs() {
     return api('/api/jobs').then(function (data) {
@@ -787,7 +737,7 @@
   function startApp() {
     showApp();
     renderPrs(); renderJobs();
-    refreshStatus(); loadAuto(); loadRules(); loadAccuracy(); loadLocalInputs();
+    refreshStatus(); loadAuto(); loadRules(); loadAccuracy();
     if (started) { pollJobs(); return; }
     started = true;
     $('owner').value = store.get('owner');
@@ -801,9 +751,6 @@
   }
 
   $('load').addEventListener('click', loadPrs);
-  $('localgo').addEventListener('click', startLocalReview);
-  $('localrefresh').addEventListener('click', loadLocalInputs);
-  $('localcard').addEventListener('toggle', function () { if ($('localcard').open) loadLocalInputs(); });
   $('filter').addEventListener('input', renderPrs);
   $('statusfilter').addEventListener('change', renderPrs);
   $('bulk').addEventListener('click', reviewAllNew);
