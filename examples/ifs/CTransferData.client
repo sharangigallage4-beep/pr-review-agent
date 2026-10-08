@@ -1,0 +1,17 @@
+-- Logical unit: TransferData
+--  Example file for the review agent (synthetic - not real IFS code).
+client CTransferData;
+component CRM;
+layer Cust;
+
+//(+)260401 tester M-M001-LPS-3000-1(start)
+dialog CTransferDlg for CTransferData {
+   label = "Transfer";
+}
+
+command CRunTransfer for CTransferData {
+   execute {
+      call Run();
+   }
+}
+//(+)260401 tester M-M001-LPS-3000-1(finish)

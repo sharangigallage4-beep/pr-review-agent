@@ -1,0 +1,15 @@
+projection CustomerHandling;
+component CRM;
+layer Cust;
+
+entityset CompanyLovs for CompanyLov;
+
+entity CompanyLov {
+   attribute Name Text;
+   reference CountryLink(CountryCode) to IsoCountry(CountryCode);
+}
+
+@Overtake
+query ExistingCustomerContact {
+   attribute CompanyType Text;
+}

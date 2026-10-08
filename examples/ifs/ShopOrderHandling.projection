@@ -15,4 +15,5 @@ entityset ShopOrders for ShopOrder;
 entity ShopOrder {
    attribute OrderNo Text;
    attribute Contract Text;
+   attribute CustomerNote Text;
 }
