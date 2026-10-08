@@ -1,7 +1,7 @@
 import type { ReviewIssue } from '../review/types.js';
 import { reviewPullRequest as defaultReview } from '../review/reviewService.js';
 import { filterReviewableFiles } from '../workflow/fileFilter.js';
-import { findIfsIssues as defaultFindIfsIssues } from '../workflow/ifsCheck.js';
+import { findIfsIssues as defaultFindIfsIssues, isCoveredByIfsChecks } from '../workflow/ifsCheck.js';
 import { findSyntaxErrors as defaultFindSyntaxErrors } from '../workflow/syntaxCheck.js';
 import { unifiedDiff } from './lineDiff.js';
 
@@ -199,7 +199,8 @@ export async function runVersionReview(input: VersionReviewInput, deps: VersionR
         });
         const known = new Set(files.map((f) => f.filename));
         // A file the model invented cannot be a real finding; keep only those about this batch's files.
-        aiFindings.push(...result.issues.filter((issue) => known.has(issue.file)));
+        // ...and on IFS files, claims the rule checks already cover exactly (often wrong from a small model).
+        aiFindings.push(...result.issues.filter((issue) => known.has(issue.file) && !isCoveredByIfsChecks(issue)));
       } catch (err) {
         failed += 1;
         log(`AI batch ${i + 1} failed: ${err instanceof Error ? err.message : 'unknown error'}`);

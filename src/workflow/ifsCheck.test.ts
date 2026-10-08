@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { findIfsIssues, isIfsFile, parsePatchLines } from './ifsCheck.js';
+import { findIfsIssues, isCoveredByIfsChecks, isIfsFile, parsePatchLines } from './ifsCheck.js';
 import type { IfsFile } from './ifsCheck.js';
 
 /** A patch for a brand-new file: every line added. */
@@ -220,3 +220,24 @@ describe('header comment (CM1)', () => {
     assert.deepEqual(titles([added('CFooHandling.projection', ['-- Logical unit: ShopOrderHandling', 'projection CFooHandling;'])]), []);
   });
 });
+
+describe('isCoveredByIfsChecks', () => {
+  const issue = (file: string, title: string, explanation = 'because') => ({
+    severity: 'medium' as const, file, line: 1, title, explanation, suggestedFix: 'fix',
+  });
+
+  test('drops the model claims about things the code verifies, on IFS files only', () => {
+    for (const title of ['Missing start and finish tags', 'Incorrect comment tags', 'Missing start tag', 'Core file modification', 'Incorrect naming of entityset', 'Header comment missing', '@Overtake used']) {
+      assert.equal(isCoveredByIfsChecks(issue('a/B-Cust.client', title)), true, title);
+      assert.equal(isCoveredByIfsChecks(issue('src/a.ts', title)), false, `${title} on a non-IFS file`);
+    }
+    assert.equal(isCoveredByIfsChecks(issue('a/B.projection', 'Entity name does not follow the suffix rule')), true, 'a suffix claim');
+  });
+
+  test('keeps genuine model findings on IFS files', () => {
+    for (const title of ['Possible null reference in expression', 'Missing validation of the quantity', 'Unbounded loop']) {
+      assert.equal(isCoveredByIfsChecks(issue('a/B-Cust.plsql', title, 'The value can be empty and then the call fails.')), false, title);
+    }
+  });
+});
+

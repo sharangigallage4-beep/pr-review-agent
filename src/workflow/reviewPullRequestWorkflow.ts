@@ -16,7 +16,7 @@ import { formatIssueCommentBody } from './fingerprint.js';
 import type { RepositoryPullRequestRef } from './fingerprint.js';
 import { detectDuplicateFindings } from './duplicateDetectionService.js';
 import { findSyntaxErrors as defaultFindSyntaxErrors, isSyntaxCheckable } from './syntaxCheck.js';
-import { findIfsIssues as defaultFindIfsIssues, isIfsFile } from './ifsCheck.js';
+import { findIfsIssues as defaultFindIfsIssues, isCoveredByIfsChecks, isIfsFile } from './ifsCheck.js';
 import { consoleLogger, toSafeLogFields } from './logger.js';
 import type { WorkflowLogger } from './logger.js';
 
@@ -205,6 +205,16 @@ export async function reviewPullRequest(
       const safe = toSafeLogFields(err);
       log.error('Claude review failed - aborting, nothing will be posted', safe);
       return { status: 'failed', stage: 'claude', reason: safe.message };
+    }
+
+    // On IFS files the code checks tags, headers, @Overtake, core-file changes and name prefixes/
+    // suffixes exactly, so the model's claims about those (often wrong) are dropped.
+    const droppedAiClaims = claudeResult.issues.filter(isCoveredByIfsChecks);
+    if (droppedAiClaims.length > 0) {
+      log.info(`Dropped ${droppedAiClaims.length} AI finding(s) on IFS files that the rule checks cover exactly`, {
+        titles: droppedAiClaims.map((i) => i.title),
+      });
+      claudeResult = { ...claudeResult, issues: claudeResult.issues.filter((i) => !isCoveredByIfsChecks(i)) };
     }
 
     // Deterministic checks, merged in ahead of the model's findings: a syntax check (node --check)

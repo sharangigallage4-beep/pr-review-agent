@@ -264,6 +264,18 @@ function checkHeader(file: IfsFile, patchLines: Line[]): ReviewIssue[] {
   ];
 }
 
+/**
+ * True when a finding the AI model reported on an IFS file is about something the code above already
+ * checks exactly (comment tags, header comment, @Overtake, core-file changes, C prefix / suffix
+ * naming). A small model gets these wrong - e.g. "missing tags" on a file that has them - so on IFS
+ * files its claims in those categories are dropped in favour of the code's own findings.
+ */
+export function isCoveredByIfsChecks(issue: ReviewIssue): boolean {
+  if (!isIfsFile(issue.file)) return false;
+  const text = `${issue.title} ${issue.explanation}`;
+  return /\b(start|finish)\b.{0,25}\btags?\b|\btags?\b.{0,25}\b(start|finish|missing|incorrect|wrong|malformed)\b|\bcomment tags?\b|\bheader comment\b|@overtake|\bcore file\b|\bC prefix\b|\bsuffix\b|^incorrect naming/i.test(text);
+}
+
 /** Runs every deterministic IFS check over the changed IFS files and returns the findings. */
 export function findIfsIssues(files: IfsFile[]): ReviewIssue[] {
   const issues: ReviewIssue[] = [];

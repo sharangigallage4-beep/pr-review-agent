@@ -127,6 +127,20 @@ describe('runVersionReview: the checks', () => {
     assert.ok(result.findings.some((f) => f.title === 'Syntax error' && f.file === 'a.js'));
   });
 
+  test('AI claims the rule checks cover exactly (e.g. "missing tags") are dropped on IFS files, real ones kept', async () => {
+    const { review } = fakeReview(() => ({
+      summary: 's',
+      issues: [aiIssue('S-Cust.projection', 1, 'Missing start and finish tags'), aiIssue('S-Cust.projection', 2, 'Possible null dereference')],
+    }));
+    const result = await runVersionReview(
+      { label: 'sol', useAi: true, oldFiles: files({ 'S-Cust.projection': 'projection X;\n' }), newFiles: files({ 'S-Cust.projection': 'projection X;\nentity CFoo {\n}\n' }) },
+      { log: noop, review }
+    );
+    const titles = result.findings.map((f) => f.title);
+    assert.equal(titles.includes('Missing start and finish tags'), false);
+    assert.ok(titles.includes('Possible null dereference'));
+  });
+
   test('AI findings about files outside the batch are dropped; the rest are merged and sorted by severity', async () => {
     const { review } = fakeReview(() => ({ summary: 's', issues: [aiIssue('a.txt', 1, 'real'), aiIssue('invented.txt', 1, 'invented')] }));
     const result = await runVersionReview(

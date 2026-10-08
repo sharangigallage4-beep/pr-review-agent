@@ -788,3 +788,27 @@ describe('reviewPullRequest IFS rule checks', () => {
     assert.deepEqual(seen.map((f) => [f.filename, f.content]), [['CustomerHandling-Cust.projection', undefined]]);
   });
 });
+
+describe('reviewPullRequest drops AI claims the IFS rule checks cover', () => {
+  test('a "missing tags" claim on an IFS file is dropped, a real finding is kept', async () => {
+    const ifsFile = { ...reviewableFile, filename: 'CustomerHandling-Cust.projection' };
+    const outcome = await reviewPullRequest(
+      'acme',
+      'widgets',
+      42,
+      baseDeps({
+        getChangedFiles: async ({ page, perPage }) => changedFilesPage([ifsFile], 1, page ?? 1, perPage ?? 100),
+        getFileContent: async () => ({ path: 'x', ref: 'sha', sha: 's', size: 1, content: 'projection X;' }),
+        runClaudeReview: async () => ({
+          summary: 'two things',
+          issues: [
+            { severity: 'medium' as const, file: 'CustomerHandling-Cust.projection', line: 11, title: 'Missing start and finish tags', explanation: 'x', suggestedFix: 'y' },
+            { severity: 'high' as const, file: 'CustomerHandling-Cust.projection', line: 11, title: 'Possible null dereference', explanation: 'x', suggestedFix: 'y' },
+          ],
+        }),
+      })
+    );
+    assert.equal(outcome.status === 'posted' ? outcome.totalFindings : -1, 1);
+  });
+});
+
