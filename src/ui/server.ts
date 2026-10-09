@@ -7,6 +7,7 @@ import { buildUiApp } from './app.js';
 import { createAuth } from './auth.js';
 import { AutoReviewer } from './autoReview.js';
 import { JobManager } from './jobs.js';
+import { listenErrorMessage } from './listenError.js';
 import { listOpenPullRequests, readStatus } from './services.js';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
@@ -63,7 +64,14 @@ function main(): void {
     localInputDir: process.env.PR_REVIEW_LOCAL_INPUT_DIR || path.join(root, 'local-input'),
   });
 
-  app.listen(port, host, () => {
+  app.listen(port, host, (error?: Error) => {
+    // Express 5 reports a failed listen here instead of throwing; without this check a port Windows
+    // had reserved made the server print "running" and then exit without a word.
+    if (error) {
+      console.error(listenErrorMessage(error, host, port));
+      process.exitCode = 1;
+      return;
+    }
     console.log(`PR review UI running at http://${host === '0.0.0.0' ? 'localhost' : host}:${port}  (Ctrl+C to stop)`);
     if (password) console.log('Password protection is ON.');
   });
