@@ -63,3 +63,25 @@ describe('conventionsStore', () => {
       assert.equal(deleteConventionDoc(dir, 'gone.md'), false);
     }));
 });
+
+describe('the documents shipped in docs/conventions', () => {
+  const shipped = listConventionDocs(path.join(import.meta.dirname, '..', '..', 'docs', 'conventions'));
+
+  test('every document has numbered rules, and no rule number is used twice across documents', () => {
+    assert.ok(shipped.length >= 5, 'the shipped documents were found');
+    const seen = new Map<string, string>();
+    for (const doc of shipped) {
+      assert.ok(doc.ruleCount > 0, `${doc.name} has numbered rules`);
+      for (const match of doc.content.matchAll(/^\s*-\s+([A-Z]{1,3}\d+)\./gm)) {
+        const id = match[1];
+        assert.equal(seen.get(id), undefined, `${id} appears in both ${seen.get(id)} and ${doc.name}`);
+        seen.set(id, doc.name);
+      }
+    }
+  });
+
+  test('each document is scoped to file types, so one stack never loads another stack rules', () => {
+    for (const doc of shipped) assert.ok(doc.appliesTo && doc.appliesTo.length > 0, `${doc.name} needs an applies-to line`);
+  });
+});
+
