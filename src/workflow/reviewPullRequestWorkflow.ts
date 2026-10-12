@@ -17,6 +17,7 @@ import type { RepositoryPullRequestRef } from './fingerprint.js';
 import { detectDuplicateFindings } from './duplicateDetectionService.js';
 import { findSyntaxErrors as defaultFindSyntaxErrors, isSyntaxCheckable } from './syntaxCheck.js';
 import { findIfsIssues as defaultFindIfsIssues, isCoveredByIfsChecks, isIfsFile } from './ifsCheck.js';
+import { createGithubRetry } from './githubRetry.js';
 import { consoleLogger, toSafeLogFields } from './logger.js';
 import type { WorkflowLogger } from './logger.js';
 
@@ -80,6 +81,34 @@ export interface ReviewPullRequestDeps {
    */
   confirmBeforePosting: (preview: ReviewPreview) => boolean | Promise<boolean>;
   logger: WorkflowLogger;
+  /**
+   * First wait (ms) before retrying a GitHub call that failed on a network error; it doubles each
+   * time, over up to 5 retries. Default 1000. Tests set it to 1 to avoid waiting.
+   */
+  retryDelayMs?: number;
+}
+
+/**
+ * Wraps every GitHub call so a brief outage (no DNS, dropped connection, a 502/503) is retried
+ * instead of aborting a review whose slow model step has already finished. Reads retry on any
+ * transient failure; the one write (posting the review) retries only when the request never left
+ * this computer, so it can never post twice.
+ */
+function withGithubRetries(deps: ReviewPullRequestDeps): ReviewPullRequestDeps {
+  const github = createGithubRetry(deps.logger, { delayMs: deps.retryDelayMs });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const read = <F extends (...args: any[]) => Promise<any>>(fn: F): F => ((...args: Parameters<F>) => github.read(() => fn(...args))) as F;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const write = <F extends (...args: any[]) => Promise<any>>(fn: F): F => ((...args: Parameters<F>) => github.write(() => fn(...args))) as F;
+  return {
+    ...deps,
+    getPullRequest: read(deps.getPullRequest),
+    getChangedFiles: read(deps.getChangedFiles),
+    getPullRequestDiff: read(deps.getPullRequestDiff),
+    getExistingReviewComments: read(deps.getExistingReviewComments),
+    getFileContent: read(deps.getFileContent),
+    createPullRequestReview: write(deps.createPullRequestReview),
+  };
 }
 
 // This workflow always receives owner/repo explicitly (they're its own first two parameters),
@@ -135,7 +164,7 @@ export async function reviewPullRequest(
   pullRequestNumber: number,
   overrides: Partial<ReviewPullRequestDeps> = {}
 ): Promise<ReviewPullRequestOutcome> {
-  const deps = { ...defaultDeps(), ...overrides };
+  const deps = withGithubRetries({ ...defaultDeps(), ...overrides });
   const log = deps.logger;
   const ref = { owner, repo, pullNumber: pullRequestNumber };
 

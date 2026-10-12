@@ -5,6 +5,8 @@ export interface RetryOptions {
   delayMs?: number;
   /** Called before each retry (not before the first attempt) with the 1-based retry number. */
   onRetry?: (attempt: number, err: unknown) => void;
+  /** Return false to give up immediately on an error that retrying cannot fix. Default: retry everything. */
+  shouldRetry?: (err: unknown) => boolean;
 }
 
 /**
@@ -22,7 +24,7 @@ export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions =
       return await fn();
     } catch (err) {
       lastError = err;
-      if (attempt === retries) break;
+      if (attempt === retries || options.shouldRetry?.(err) === false) break;
       options.onRetry?.(attempt + 1, err);
       await sleep(delayMs * 2 ** attempt);
     }

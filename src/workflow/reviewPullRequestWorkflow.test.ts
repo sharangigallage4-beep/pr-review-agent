@@ -812,3 +812,89 @@ describe('reviewPullRequest drops AI claims the IFS rule checks cover', () => {
   });
 });
 
+describe('reviewPullRequest survives a short GitHub outage', () => {
+  const dns = () => Object.assign(new Error('getaddrinfo ENOTFOUND api.github.com'), { status: 500 });
+
+  test('comments fetched after the slow model step are retried, so the finished review is not lost', async () => {
+    let commentCalls = 0;
+    let modelCalls = 0;
+    const outcome = await reviewPullRequest(
+      'acme',
+      'widgets',
+      42,
+      baseDeps({
+        retryDelayMs: 1,
+        runClaudeReview: async () => {
+          modelCalls += 1;
+          return {
+            summary: 'one finding',
+            issues: [{ severity: 'high' as const, file: 'src/checkout.ts', line: 11, title: 'Race', explanation: 'x', suggestedFix: 'y' }],
+          };
+        },
+        getExistingReviewComments: async () => {
+          commentCalls += 1;
+          if (commentCalls <= 2) throw dns();
+          return { repository: 'acme/widgets', number: 42, filtered_by_author: 'pr-review-bot', count: 0, comments: [] };
+        },
+      })
+    );
+    assert.equal(outcome.status, 'posted');
+    assert.equal(commentCalls, 3);
+    assert.equal(modelCalls, 1, 'the model is not called again');
+  });
+
+  test('posting is retried only when the request never left, and a lasting outage still fails at the post stage', async () => {
+    let posts = 0;
+    const outcome = await reviewPullRequest(
+      'acme',
+      'widgets',
+      42,
+      baseDeps({
+        retryDelayMs: 1,
+        createPullRequestReview: async () => {
+          posts += 1;
+          throw dns();
+        },
+      })
+    );
+    assert.equal(outcome.status === 'failed' ? outcome.stage : outcome.status, 'post');
+    assert.equal(posts, 6, 'first attempt plus five retries');
+  });
+
+  test('a write that may have reached GitHub is not repeated', async () => {
+    let posts = 0;
+    const outcome = await reviewPullRequest(
+      'acme',
+      'widgets',
+      42,
+      baseDeps({
+        retryDelayMs: 1,
+        createPullRequestReview: async () => {
+          posts += 1;
+          throw new Error('read ECONNRESET');
+        },
+      })
+    );
+    assert.equal(outcome.status === 'failed' ? outcome.stage : outcome.status, 'post');
+    assert.equal(posts, 1);
+  });
+
+  test('a real error such as a missing PR is not retried', async () => {
+    let calls = 0;
+    const outcome = await reviewPullRequest(
+      'acme',
+      'widgets',
+      42,
+      baseDeps({
+        retryDelayMs: 1,
+        getPullRequest: async () => {
+          calls += 1;
+          throw Object.assign(new Error('Not Found'), { status: 404 });
+        },
+      })
+    );
+    assert.equal(outcome.status === 'failed' ? outcome.stage : outcome.status, 'fetch');
+    assert.equal(calls, 1);
+  });
+});
+
