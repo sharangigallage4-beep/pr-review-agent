@@ -53,48 +53,84 @@ The Docker files (`Dockerfile`, `docker-compose.yml`, `Caddyfile`) have **not be
    request, check the preview, then **Post** or **Discard**. The **Auto-review** switch makes the server watch the
    repository itself.
 
-## 2b. The easy way: a hosting service that builds the Dockerfile (no server, SSH or domain)
+## 2b. The easy way: Render (no server, SSH, domain or Docker)
 
-Services such as Render, Railway or Fly.io build this repository's `Dockerfile` for you, give the app a
-ready-made `https://...` address and take care of HTTPS. The UI recognises their `PORT` variable and their public
-host name automatically. The steps below are for **Render** (they are written without having used it for this project, and
-the button labels may differ a little):
+The review UI is **one Node.js app** that serves both the page and its API, so unlike a split frontend/backend setup there
+is only **one** thing to deploy and nothing to connect (no Netlify, no CORS, no n8n, no database). Render builds it from
+the GitHub repository, gives it an `https://...` address, and **redeploys on every push to `main`**.
 
-1. Prepare the secrets: a **new** fine-grained GitHub token (only the repositories to review; Pull requests: read and
-   write, Contents: read; with an expiry date), an Anthropic API key with a spending limit, and a long random password
-   for the UI.
-2. Sign in to render.com with your GitHub account. **New + -> Web Service**, pick this repository (a public one can be
-   pasted as a public Git repository URL).
-3. Settings: **Language / Runtime: Docker**, branch `main`, a small instance type. (A free instance may go to sleep
-   when nobody uses it and take about a minute to wake; a paid one stays on.) Optional, under Advanced: health check
-   path `/api/session`.
-4. **Environment variables:**
+The UI recognises Render automatically: it listens on `0.0.0.0` and Render's `PORT`, trusts Render's HTTPS proxy, marks
+the login cookie `Secure`, and accepts the `*.onrender.com` address. You only have to give it the secrets.
+(These steps were written without having deployed to Render, and button labels may differ a little.)
 
-   ```
-   PR_REVIEW_UI_PASSWORD=<the long random password>
-   PR_REVIEW_UI_COOKIE_SECURE=true
-   PR_REVIEW_UI_TRUST_PROXY=1
-   GITHUB_TOKEN=<the new token>
-   GITHUB_OWNER=<default owner>
-   GITHUB_REPO=<default repo>
-   ANTHROPIC_API_KEY=<the new key>
-   ANTHROPIC_MODEL=claude-sonnet-5-5
-   ```
+**Before you start**
+- A **new** fine-grained GitHub token (only the repositories to review; Pull requests: read and write, Contents: read;
+  with an expiry date), an Anthropic API key **used only for this** with a **monthly spending limit** set in the Anthropic
+  console, and a long random password for the UI (`node -e "console.log(require('crypto').randomBytes(24).toString('base64url'))"`).
+  Keep them in a private notes file outside the project; never put them in code, Git, chat or screenshots.
+- Check nothing secret is committed: `git grep -i "sk-ant"` must print nothing.
+- Run it locally once: `npm install`, then `npm run ui`, and open `http://127.0.0.1:4500`.
 
-   Do **not** set `ANTHROPIC_BASE_URL` and do not set a port - Render supplies `PORT`.
-5. **Create Web Service.** When the build finishes, open the address Render shows (`https://<name>.onrender.com`)
-   and sign in with the password.
+**On Render**
+1. Sign up at render.com with GitHub (choose "Only select repositories" and pick this repo).
+2. **New + -> Web Service**, select the repository, and fill in the form:
 
-Things to know:
+   | Field | Value |
+   |---|---|
+   | Name | `pr-review-agent-ui` (must be unique) |
+   | Region | the closest one |
+   | Branch | `main` |
+   | Root Directory | leave empty |
+   | Runtime / Language | **Node** |
+   | Build Command | `npm ci --include=dev` |
+   | Start Command | `npm run ui` |
+   | Instance Type | **Free** |
 
-- The hosted UI cannot reach an Ollama on your own computer, so it uses the Claude API (your code goes to Anthropic).
-- Leave the UI's **Auto-review** switch off: the GitHub Actions workflow already reviews new pull requests, and a
-  free instance that is asleep would not run it anyway. Use the hosted UI for reviews you want to preview first.
-- Review history is kept on the instance's disk and is lost on every redeploy unless you attach a persistent disk
-  (usually a paid feature, mounted at `/data`). Edits made in the "Review rules" page are lost the same way - change
-  `docs/conventions/*.md` in git instead.
-- Every push to `main` redeploys it. Set `PR_REVIEW_UI_PASSWORD` to something long: it is the only protection.
-- Railway and Fly.io work the same way (they also pass `PORT`; their public host names are recognised too).
+   (The dev dependencies are needed because the app runs its TypeScript with `tsx`.)
+3. **Environment Variables** (check each value for stray spaces):
+
+   | Key | Value |
+   |---|---|
+   | `NODE_VERSION` | `22` |
+   | `PR_REVIEW_UI_PASSWORD` | the long random password |
+   | `GITHUB_TOKEN` | the new token |
+   | `GITHUB_OWNER` | default owner |
+   | `GITHUB_REPO` | default repo |
+   | `ANTHROPIC_API_KEY` | the Anthropic key |
+   | `ANTHROPIC_MODEL` | `claude-sonnet-5-5` |
+
+   Do **not** set `ANTHROPIC_BASE_URL` or a port.
+4. Optional, under Advanced: **Health Check Path** `/api/session` (it answers without logging in).
+5. **Create Web Service.** Watch the **Logs**: after the build you should see `PR review UI running at ...` and
+   `Password protection is ON.`, and the status becomes **Live**. Open `https://<name>.onrender.com`, sign in, load
+   a repository, and try a review.
+
+**Checklist** (tick each one)
+- [ ] `https://<name>.onrender.com/api/session` answers (`{"authRequired":true,"authenticated":false}`)
+- [ ] The page opens and the password logs you in; a wrong password is refused
+- [ ] **Load pull requests** lists the repository's pull requests
+- [ ] A review runs and shows findings, and nothing is posted until you press **Post to GitHub**
+- [ ] A spending limit is set in the Anthropic console
+- [ ] `git grep -i "sk-ant"` prints nothing
+
+**Things to know**
+- A free instance **sleeps after about 15 minutes without use**; the first request afterwards takes 30-60 seconds.
+- The hosted UI cannot reach an Ollama on your computer, so it uses the Claude API (your code goes to Anthropic).
+- Leave the **Auto-review** switch off: the GitHub Actions workflow already reviews new pull requests.
+- Review history lives on the instance's disk and is lost on every redeploy unless you attach a persistent disk
+  (usually paid, mounted at `/data` with `PR_REVIEW_DATA_DIR=/data`). Edits in the "Review rules" page are lost the
+  same way - change `docs/conventions/*.md` in git instead.
+- Render may ask for a payment card even for a free instance. Railway and Fly.io work the same way (the app recognises
+  them too), and a `Dockerfile` is also provided if you prefer **Runtime: Docker**.
+
+| What you see | What it means | Fix |
+|---|---|---|
+| "No open ports detected" | The app is not listening on Render's port | Remove any `PR_REVIEW_UI_PORT` / `PR_REVIEW_UI_HOST` variable you added |
+| "GITHUB_TOKEN is not set" / "Refusing to listen ... without a password" | A variable is missing or misspelled | Check the names exactly, and for stray spaces |
+| Build fails at `tsx` / "not found" | Dev dependencies were skipped | Build Command must be `npm ci --include=dev` |
+| "This host name is not allowed" | The address is not recognised | Add `PR_REVIEW_UI_ALLOWED_HOSTS` = `<name>.onrender.com` |
+| Chat or review says the model/key is wrong | `ANTHROPIC_API_KEY` or `ANTHROPIC_MODEL` is wrong | Fix the value and look at the Logs |
+| First page load takes a minute | The free instance was asleep | Normal; wait and retry |
 
 ## 3. Running it
 

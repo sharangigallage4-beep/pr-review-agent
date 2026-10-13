@@ -7,7 +7,7 @@ import { buildUiApp } from './app.js';
 import { createAuth } from './auth.js';
 import { AutoReviewer } from './autoReview.js';
 import { JobManager } from './jobs.js';
-import { isLoopbackHost, platformHosts, resolvePort } from './hostConfig.js';
+import { isLoopbackHost, platformHosts, resolveCookieSecure, resolveHost, resolvePort, resolveTrustProxy } from './hostConfig.js';
 import { listenErrorMessage } from './listenError.js';
 import { listOpenPullRequests, readStatus } from './services.js';
 
@@ -28,7 +28,7 @@ function main(): void {
   }
 
   const port = resolvePort(process.env);
-  const host = process.env.PR_REVIEW_UI_HOST || '127.0.0.1';
+  const host = resolveHost(process.env);
   const password = process.env.PR_REVIEW_UI_PASSWORD || '';
   if (!isLoopbackHost(host) && !password) {
     console.error(
@@ -38,9 +38,9 @@ function main(): void {
     process.exitCode = 1;
     return;
   }
-  // PR_REVIEW_UI_TRUST_PROXY=1 when exactly one reverse proxy (Caddy, nginx) is in front of the UI.
-  const trustProxyRaw = (process.env.PR_REVIEW_UI_TRUST_PROXY ?? '').trim();
-  const trustProxy = trustProxyRaw === '' ? undefined : /^\d+$/.test(trustProxyRaw) ? Number(trustProxyRaw) : trustProxyRaw;
+  // PR_REVIEW_UI_TRUST_PROXY=1 when exactly one reverse proxy (Caddy, nginx) is in front of the UI;
+  // on a hosting service (Render, Railway, Fly.io) that is the default.
+  const trustProxy = resolveTrustProxy(process.env);
   const allowedHosts = [
     ...(process.env.PR_REVIEW_UI_ALLOWED_HOSTS ?? '')
       .split(',')
@@ -65,7 +65,7 @@ function main(): void {
     publicDir: path.join(here, 'public'),
     allowedHosts,
     trustProxy,
-    auth: password ? createAuth({ password, cookieSecure: process.env.PR_REVIEW_UI_COOKIE_SECURE === 'true' }) : undefined,
+    auth: password ? createAuth({ password, cookieSecure: resolveCookieSecure(process.env) }) : undefined,
     auto: new AutoReviewer({ jobs, listPullRequests, stateFile: path.join(dataDir, '.ui-auto-state.json') }),
     conventionsDir: process.env.PR_REVIEW_CONVENTIONS_DIR || defaultConventionsDir(),
     localInputDir: process.env.PR_REVIEW_LOCAL_INPUT_DIR || path.join(root, 'local-input'),
