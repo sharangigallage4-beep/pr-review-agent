@@ -31,6 +31,20 @@ describe('error classification', () => {
     assert.equal(isNeverSent(notFound), false);
   });
 
+  test('Node fetch connect timeouts (the real error seen on a flaky connection) are retried, and are safe to retry for a write', () => {
+    const connectTimeout = Object.assign(new Error('Connect Timeout Error (attempted address: api.github.com:443, timeout: 10000ms)'), { status: 500 });
+    const coded = Object.assign(new Error('fetch failed'), { cause: Object.assign(new Error('x'), { code: 'UND_ERR_CONNECT_TIMEOUT' }) });
+    for (const err of [connectTimeout, coded]) {
+      assert.equal(isTransientRead(err), true, String(err));
+      assert.equal(isNeverSent(err), true, 'the connection was never made, so a write cannot have been posted');
+    }
+    // A reply that stalls or a closed socket might have reached GitHub: reads retry, writes do not.
+    for (const err of [Object.assign(new Error('Headers Timeout Error'), { code: 'UND_ERR_HEADERS_TIMEOUT' }), new Error('other side closed')]) {
+      assert.equal(isTransientRead(err), true, String(err));
+      assert.equal(isNeverSent(err), false, String(err));
+    }
+  });
+
   test('reads retry network errors and temporary GitHub statuses, never real errors', () => {
     for (const err of [dns, reset, unavailable, new Error('fetch failed'), Object.assign(new Error('x'), { status: 429 }), Object.assign(new Error('x'), { code: 'ETIMEDOUT' })]) {
       assert.equal(isTransientRead(err), true, String(err));

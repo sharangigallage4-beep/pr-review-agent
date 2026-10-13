@@ -2,9 +2,9 @@ import { withRetry } from '../webhook/retry.js';
 import type { WorkflowLogger } from './logger.js';
 
 /** Failures where the request never reached GitHub, so repeating even a write cannot post twice. */
-const NEVER_SENT = /\b(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH)\b/i;
+const NEVER_SENT = /\b(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ENETUNREACH|EHOSTUNREACH|UND_ERR_CONNECT_TIMEOUT)\b|Connect Timeout Error/i;
 /** Network trouble in general - the request may or may not have arrived. */
-const NETWORK = /\b(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|EPIPE)\b|socket hang up|fetch failed|network error|request timed out/i;
+const NETWORK = /\b(ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|EPIPE|UND_ERR_\w+)\b|Connect Timeout Error|Headers Timeout Error|Body Timeout Error|other side closed|socket hang up|fetch failed|network error|request timed out/i;
 const TRANSIENT_STATUSES = new Set([429, 502, 503, 504]);
 
 function messageOf(err: unknown): string {
