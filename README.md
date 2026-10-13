@@ -616,6 +616,7 @@ every missing variable, rather than failing on the first:
 | `PR_REVIEW_UI_PORT` / `PR_REVIEW_UI_HOST` | `src/ui/server.ts` (optional) | Web UI port (default 4500) and bind address (default `127.0.0.1`). |
 | `PR_REVIEW_UI_PASSWORD` | `src/ui/server.ts` (optional) | Turns on the login page. **Required** whenever the host is not loopback - the server refuses to start without it. |
 | `PR_REVIEW_UI_TRUST_PROXY` | `src/ui/server.ts` (optional) | Number of reverse proxies in front of the UI (1 with the bundled Caddy), so login attempts are limited per person. Leave unset without a proxy. |
+| `PR_REVIEW_UI_ALLOWED_ORIGINS` | `src/ui/server.ts` (optional) | Origins of a separate website (a Netlify site) that forwards its `/api` calls to this server. See DEPLOYMENT.md, "Netlify frontend". |
 | `PR_REVIEW_UI_ALLOWED_HOSTS` / `PR_REVIEW_UI_COOKIE_SECURE` | `src/ui/server.ts` (optional) | Extra `Host` names to accept when shared on a network, and the `Secure` cookie flag for HTTPS. |
 | `PR_REVIEW_DATA_DIR` | `src/ui/server.ts` (optional) | Where the UI keeps its review history and auto-review state (default: the project folder). |
 

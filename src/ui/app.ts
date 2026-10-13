@@ -56,6 +56,12 @@ export interface BuildUiAppOptions {
   /** Injectable for tests - defaults to the real version comparison and review. */
   versionReview?: typeof runVersionReview;
   /**
+   * Origins (e.g. "https://my-site.netlify.app") of a separate website that fronts this server and
+   * forwards its /api calls here. Their requests carry that website's Origin and possibly its Host,
+   * which would otherwise be refused; listing them here accepts exactly those and nothing else.
+   */
+  allowedOrigins?: string[];
+  /**
    * Set this when the UI sits behind a reverse proxy (e.g. Caddy): the number of proxies in front of
    * it, or a subnet list. Express then reads the real client address from X-Forwarded-For, so the
    * login throttle counts each person separately instead of treating everyone as the proxy. Leave
@@ -84,6 +90,14 @@ function hostWithoutPort(host: string): string {
 export function buildUiApp(options: BuildUiAppOptions): Express {
   const { jobs, auth } = options;
   const allowedHosts = new Set((options.allowedHosts ?? []).map((h) => h.toLowerCase()));
+  const originHosts = new Set<string>();
+  for (const origin of options.allowedOrigins ?? []) {
+    try {
+      originHosts.add(new URL(origin).host.toLowerCase());
+    } catch {
+      // an unparseable entry simply allows nothing
+    }
+  }
 
   const app = express();
   app.disable('x-powered-by');
@@ -91,7 +105,7 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
 
   app.use((req: Request, res: Response, next: NextFunction) => {
     const host = (req.header('host') ?? '').toLowerCase();
-    if (!LOCAL_HOSTS.has(hostWithoutPort(host)) && !allowedHosts.has(host)) {
+    if (!LOCAL_HOSTS.has(hostWithoutPort(host)) && !allowedHosts.has(host) && !originHosts.has(host)) {
       res.status(403).json({ error: 'This host name is not allowed.' });
       return;
     }
@@ -104,7 +118,7 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
         } catch {
           // fall through - an unparseable Origin is rejected below
         }
-        if (originHost !== host) {
+        if (originHost !== host && !originHosts.has(originHost)) {
           res.status(403).json({ error: 'Cross-origin requests are not allowed.' });
           return;
         }

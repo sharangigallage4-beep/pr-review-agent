@@ -50,6 +50,12 @@ function main(): void {
     ...platformHosts(process.env),
   ];
 
+  // Separate websites (a Netlify site) allowed to front this server, e.g. https://my-site.netlify.app
+  const allowedOrigins = (process.env.PR_REVIEW_UI_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+
   const here = path.dirname(fileURLToPath(import.meta.url));
   const root = path.join(here, '..', '..');
   // Where the review history and auto-review state are kept. Defaults to the project folder; a
@@ -64,6 +70,7 @@ function main(): void {
     getStatus: () => readStatus(process.env),
     publicDir: path.join(here, 'public'),
     allowedHosts,
+    allowedOrigins,
     trustProxy,
     auth: password ? createAuth({ password, cookieSecure: resolveCookieSecure(process.env) }) : undefined,
     auto: new AutoReviewer({ jobs, listPullRequests, stateFile: path.join(dataDir, '.ui-auto-state.json') }),

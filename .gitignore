@@ -11,3 +11,4 @@ dist/
 docs/conventions/customer-solution/
 local-input/
 *.zip
+netlify-dist/

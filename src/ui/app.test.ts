@@ -383,3 +383,61 @@ describe('review UI app: login throttle behind a reverse proxy', () => {
     assert.equal((await attempt(base, 'wrong', '10.9.9.9')).status, 429, 'changing the header does not reset the count');
   });
 });
+
+describe('review UI app: a separate website (Netlify) fronting the server', () => {
+  let server: Server;
+  let base: string;
+  let dir: string;
+
+  before(async () => {
+    dir = mkdtempSync(path.join(tmpdir(), 'ui-origins-'));
+    writeFileSync(path.join(dir, 'index.html'), 'x');
+    const app = buildUiApp({
+      jobs: new JobManager({ echo: silent }),
+      publicDir: dir,
+      listPullRequests: async () => [],
+      getStatus: async () => ({ github: { configured: true }, model: { kind: 'anthropic' } }),
+      allowedOrigins: ['https://my-site.netlify.app', 'not a url'],
+    });
+    server = app.listen(0, '127.0.0.1');
+    await new Promise((r) => server.once('listening', r));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+
+  after(() => {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  // 400 = the request got past the origin check and failed validation (no pr), 403 = refused.
+  const post = (origin: string) =>
+    fetch(base + '/api/jobs', { method: 'POST', headers: { 'content-type': 'application/json', origin }, body: '{}' });
+
+  test('accepts requests that come from the listed website', async () => {
+    assert.equal((await post('https://my-site.netlify.app')).status, 400);
+  });
+
+  test('still refuses every other origin, and an unparseable entry allows nothing', async () => {
+    assert.equal((await post('https://evil.example')).status, 403);
+    assert.equal((await post('https://other-site.netlify.app')).status, 403);
+    assert.equal((await post('not a url')).status, 403);
+  });
+
+  test('without any allowed origin, a foreign Origin is refused as before', async () => {
+    const app = buildUiApp({
+      jobs: new JobManager({ echo: silent }),
+      publicDir: dir,
+      listPullRequests: async () => [],
+      getStatus: async () => ({ github: { configured: true }, model: { kind: 'anthropic' } }),
+    });
+    const s = app.listen(0, '127.0.0.1');
+    await new Promise((r) => s.once('listening', r));
+    try {
+      const url = `http://127.0.0.1:${(s.address() as AddressInfo).port}/api/jobs`;
+      const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://my-site.netlify.app' }, body: '{}' });
+      assert.equal(res.status, 403);
+    } finally {
+      s.close();
+    }
+  });
+});

@@ -132,6 +132,60 @@ the login cookie `Secure`, and accepts the `*.onrender.com` address. You only ha
 | Chat or review says the model/key is wrong | `ANTHROPIC_API_KEY` or `ANTHROPIC_MODEL` is wrong | Fix the value and look at the Logs |
 | First page load takes a minute | The free instance was asleep | Normal; wait and retry |
 
+## 2c. Netlify frontend (the page on Netlify, the review server somewhere else)
+
+Netlify can host the review **page**; it cannot run the review server. That server (the **backend**) must already be running
+at a public `https://` address - on Render (section 2b), a server you manage, or any other host. Without it the Netlify page
+loads but every action says "Request failed". Netlify forwards the page's `/api/...` calls to the backend, so the browser
+sees one site (no CORS to configure).
+
+```
+browser ──► NETLIFY (the page)  ── /api/* forwarded ──►  BACKEND (review server) ──► GitHub API, Claude API
+```
+
+**Set up the backend first** (2b or 2), and write down its address, e.g. `https://pr-review-agent-ui.onrender.com`.
+It must have `PR_REVIEW_UI_PASSWORD` set, and you tell it which site may talk to it:
+
+```
+PR_REVIEW_UI_ALLOWED_ORIGINS=https://12guide-review.netlify.app
+```
+
+(use the real Netlify address; it is only known after step 4, so add this variable after the first deploy and
+redeploy the backend).
+
+**On Netlify**
+1. Sign up at netlify.com with GitHub and allow access to this repository.
+2. **Add new site -> Import an existing project -> Deploy with GitHub**, and select the repository.
+3. The build settings come from `netlify.toml` in the repository (build command `npx tsx src/ui/netlifyBuild.ts`, publish
+   directory `netlify-dist`). Leave the base directory empty.
+4. Under **Environment variables** add `API_URL` = the backend address, **with no `/` at the end and without `/api`**.
+5. **Deploy.** When the log says the site is live, rename it under **Site configuration -> Change site name**, and copy
+   the address into your notes. If the build fails, the log says why (a missing or malformed `API_URL`).
+6. Add that address to the backend as `PR_REVIEW_UI_ALLOWED_ORIGINS` (see above) and redeploy the backend.
+7. Open the Netlify address, sign in with the UI password, and load a repository.
+
+**Checklist**
+- [ ] The backend address `/api/session` answers on its own
+- [ ] The Netlify page opens and the password logs you in
+- [ ] Load pull requests works, and a review can be started
+- [ ] A change in `main` redeploys the page by itself
+
+**Things to know**
+- The page sits on Netlify's address, but **the review server still sends your code to the Claude API**, and it is the
+  server that needs the secrets (GitHub token, Anthropic key). Nothing secret goes into Netlify except the backend's address.
+- The first request after the backend slept (free instances do) takes a minute.
+- If login works on the backend address but not on the Netlify one, check that `PR_REVIEW_UI_ALLOWED_ORIGINS` is exactly the
+  Netlify address (`https://...`, no trailing slash).
+- This setup was written without having used Netlify's proxy for this project; if login fails behind it, use the backend's
+  own address (section 2b/2) instead, which has none of these moving parts.
+
+| What you see | What it means | Fix |
+|---|---|---|
+| Netlify build: "API_URL is not set" | The variable is missing | Add `API_URL`, then **Deploys -> Trigger deploy** |
+| Page loads, then "Request failed" | The backend is down, asleep, or `API_URL` is wrong | Open the backend address `/api/session`; fix `API_URL` (no `/` at the end) and redeploy |
+| "Cross-origin requests are not allowed" | The backend does not know the Netlify address | Set `PR_REVIEW_UI_ALLOWED_ORIGINS` on the backend and redeploy it |
+| "This host name is not allowed" | Same cause | Same fix |
+
 ## 3. Running it
 
 | Task | Command |

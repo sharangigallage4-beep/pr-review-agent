@@ -1,0 +1,9 @@
+# Netlify hosts only the review PAGE; the review server (backend) runs elsewhere (for example Render)
+# and its address goes in the API_URL environment variable. The build writes a _redirects file that
+# forwards /api/* to it, so the browser sees one site. See DEPLOYMENT.md, "Netlify frontend".
+[build]
+  command = "npx tsx src/ui/netlifyBuild.ts"
+  publish = "netlify-dist"
+
+[build.environment]
+  NODE_VERSION = "22"
