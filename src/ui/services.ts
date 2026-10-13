@@ -1,21 +1,45 @@
+import { withRetry } from '../webhook/retry.js';
+import { isTransientRead } from '../workflow/githubRetry.js';
 import type { AppStatus, PullRequestSummary } from './app.js';
 
 const GITHUB_TIMEOUT_MS = 15_000;
 
-/** Lists open pull requests for a repo, newest activity first. */
+const UNREACHABLE =
+  'Could not reach GitHub. Check your internet connection (a DNS problem is the usual cause) and press the button again.';
+
+/**
+ * Lists open pull requests for a repo, newest activity first. A brief network failure (a DNS hiccup,
+ * a dropped connection) or a temporary GitHub error is retried a few times before giving up, and a
+ * lasting one is reported in plain words instead of the bare "fetch failed".
+ */
 export async function listOpenPullRequests(
   owner: string,
   repo: string,
   token: string,
-  fetchFn: typeof fetch = fetch
+  fetchFn: typeof fetch = fetch,
+  retry: { delayMs?: number } = {}
 ): Promise<PullRequestSummary[]> {
-  const res = await fetchFn(
-    `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=open&sort=updated&direction=desc&per_page=50`,
-    {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
-      signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
-    }
-  );
+  const url = `https://api.github.com/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/pulls?state=open&sort=updated&direction=desc&per_page=50`;
+  let res: Response;
+  try {
+    res = await withRetry(
+      async () => {
+        const response = await fetchFn(url, {
+          headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json' },
+          signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS),
+        });
+        // Temporary GitHub errors are thrown so they are retried like a network failure.
+        if (response.status === 429 || response.status === 502 || response.status === 503 || response.status === 504) {
+          throw Object.assign(new Error(`GitHub returned ${response.status}`), { status: response.status });
+        }
+        return response;
+      },
+      { retries: 3, delayMs: retry.delayMs ?? 500, shouldRetry: isTransientRead }
+    );
+  } catch (err) {
+    if (isTransientRead(err)) throw new Error(UNREACHABLE);
+    throw err;
+  }
   if (res.status === 404) throw new Error(`Repository ${owner}/${repo} was not found, or the token cannot see it.`);
   if (res.status === 401 || res.status === 403) {
     throw new Error('GitHub rejected the token (check GITHUB_TOKEN and its permissions).');

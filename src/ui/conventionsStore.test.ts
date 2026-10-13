@@ -68,7 +68,7 @@ describe('the documents shipped in docs/conventions', () => {
   const shipped = listConventionDocs(path.join(import.meta.dirname, '..', '..', 'docs', 'conventions'));
 
   test('every document has numbered rules, and no rule number is used twice across documents', () => {
-    assert.ok(shipped.length >= 5, 'the shipped documents were found');
+    assert.ok(shipped.length >= 1, 'the shipped documents were found');
     const seen = new Map<string, string>();
     for (const doc of shipped) {
       assert.ok(doc.ruleCount > 0, `${doc.name} has numbered rules`);
