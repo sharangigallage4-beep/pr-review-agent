@@ -341,3 +341,45 @@ describe('review UI app: login, feedback, auto-review, rules editor', () => {
     assert.equal(blocked.status, 429, 'even the right password is refused while blocked');
   });
 });
+
+describe('review UI app: login throttle behind a reverse proxy', () => {
+  const servers: Server[] = [];
+  after(() => servers.forEach((s) => s.close()));
+
+  async function start(trustProxy?: number) {
+    const publicDir = mkdtempSync(path.join(tmpdir(), 'ui-proxy-'));
+    writeFileSync(path.join(publicDir, 'index.html'), 'x');
+    const app = buildUiApp({
+      jobs: new JobManager({ echo: silent }),
+      publicDir,
+      listPullRequests: async () => [],
+      getStatus: async () => ({ github: { configured: true }, model: { kind: 'anthropic' } }),
+      auth: createAuth({ password: 'right', maxFailuresPerMinute: 2 }),
+      trustProxy,
+    });
+    const server = app.listen(0, '127.0.0.1');
+    servers.push(server);
+    await new Promise((r) => server.once('listening', r));
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  }
+
+  const attempt = (base: string, password: string, forwardedFor: string) =>
+    fetch(`${base}/api/login`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': forwardedFor },
+      body: JSON.stringify({ password }),
+    });
+
+  test('with the proxy trusted, one person guessing wrong does not lock everyone else out', async () => {
+    const base = await start(1);
+    for (let i = 0; i < 2; i += 1) assert.equal((await attempt(base, 'wrong', '203.0.113.7')).status, 401);
+    assert.equal((await attempt(base, 'wrong', '203.0.113.7')).status, 429, 'the guesser is blocked');
+    assert.equal((await attempt(base, 'right', '198.51.100.9')).status, 200, 'a different person can still sign in');
+  });
+
+  test('without a proxy configured, the forwarded header is ignored (it could be faked)', async () => {
+    const base = await start(undefined);
+    for (let i = 0; i < 2; i += 1) assert.equal((await attempt(base, 'wrong', `10.0.0.${i}`)).status, 401);
+    assert.equal((await attempt(base, 'wrong', '10.9.9.9')).status, 429, 'changing the header does not reset the count');
+  });
+});

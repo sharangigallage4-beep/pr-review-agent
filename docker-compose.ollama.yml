@@ -1,0 +1,14 @@
+# Optional: use a self-hosted Ollama instead of the Claude API. Combine it with the main file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ollama.yml up -d --build
+#
+# This is for a server that has its own Ollama running (the model needs plenty of RAM, or a GPU).
+# Do NOT expose Ollama's port 11434 to the internet - it has no login of its own.
+services:
+  pr-review-ui:
+    environment:
+      # Inside the container "localhost" is the container itself, so reach Ollama on the host machine.
+      ANTHROPIC_BASE_URL: http://host.docker.internal:11434
+      ANTHROPIC_API_KEY: ollama   # any non-empty value; Ollama ignores it
+    extra_hosts:
+      - "host.docker.internal:host-gateway"   # needed on Linux; Docker Desktop provides it already

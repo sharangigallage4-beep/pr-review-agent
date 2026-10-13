@@ -1,29 +1,48 @@
-# One-command start:   docker compose up -d --build
-# Then open http://localhost:4500 and sign in with PR_REVIEW_UI_PASSWORD.
+# Production deployment: the review UI behind Caddy, which gets and renews an HTTPS certificate by
+# itself. The AI is the Claude API (ANTHROPIC_API_KEY). See DEPLOYMENT.md for the whole procedure.
 #
-# Put GITHUB_TOKEN, GITHUB_OWNER, GITHUB_REPO and PR_REVIEW_UI_PASSWORD in .env next to this file.
+#   docker compose up -d --build
+#
+# Needed in .env next to this file (never commit it): UI_DOMAIN, PR_REVIEW_UI_PASSWORD, GITHUB_TOKEN,
+# GITHUB_OWNER, GITHUB_REPO, ANTHROPIC_API_KEY, ANTHROPIC_MODEL.
+#
+# NOTE: this file has not been run by its author (no Docker on the development machine) - treat the
+# first start as a test and read the logs: docker compose logs -f
 services:
   pr-review-ui:
     build: .
-    ports:
-      # Bound to this machine only. To share it with others, change this to "4500:4500", add the
-      # address people will use to PR_REVIEW_UI_ALLOWED_HOSTS below, and serve it over HTTPS (for
-      # example behind a reverse proxy) with PR_REVIEW_UI_COOKIE_SECURE=true.
-      - "127.0.0.1:4500:4500"
     env_file: .env
     environment:
       PR_REVIEW_UI_PASSWORD: ${PR_REVIEW_UI_PASSWORD:?Set PR_REVIEW_UI_PASSWORD in .env - the UI can post to GitHub, so it must have a password}
-      PR_REVIEW_UI_ALLOWED_HOSTS: "localhost:4500,127.0.0.1:4500"
-      # Inside the container "localhost" is the container itself, so reach Ollama on the host
-      # machine instead. (Override these two lines if Ollama runs on another server.)
-      ANTHROPIC_BASE_URL: http://host.docker.internal:11434
-    extra_hosts:
-      - "host.docker.internal:host-gateway"   # needed on Linux; Docker Desktop provides it already
+      # The only host name the UI answers to: the public address people type.
+      PR_REVIEW_UI_ALLOWED_HOSTS: ${UI_DOMAIN:?Set UI_DOMAIN in .env (for example reviews.example.com)}
+      PR_REVIEW_UI_COOKIE_SECURE: "true"   # the login cookie is only sent over HTTPS
+      PR_REVIEW_UI_TRUST_PROXY: "1"        # exactly one proxy (Caddy) in front: count login attempts per person
+    # Not published to the internet: only Caddy, on the same Docker network, can reach it.
+    expose:
+      - "4500"
     volumes:
       - pr-review-data:/data
-      # Rule documents, editable from the UI's "Review rules" section and kept on your disk.
+      # Rule documents, editable from the UI's "Review rules" section and kept on the server's disk.
       - ./docs/conventions:/app/docs/conventions
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"     # needed for the certificate challenge and the redirect to HTTPS
+      - "443:443"
+    environment:
+      UI_DOMAIN: ${UI_DOMAIN:?Set UI_DOMAIN in .env (for example reviews.example.com)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data      # the certificates - keep this volume
+      - caddy-config:/config
+    depends_on:
+      - pr-review-ui
     restart: unless-stopped
 
 volumes:
   pr-review-data:
+  caddy-data:
+  caddy-config:

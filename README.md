@@ -615,6 +615,7 @@ every missing variable, rather than failing on the first:
 | `PR_REVIEW_CONVENTIONS_DIR` | `src/review/conventions.ts` (optional) | Folder of rule documents. Defaults to `docs/conventions`. |
 | `PR_REVIEW_UI_PORT` / `PR_REVIEW_UI_HOST` | `src/ui/server.ts` (optional) | Web UI port (default 4500) and bind address (default `127.0.0.1`). |
 | `PR_REVIEW_UI_PASSWORD` | `src/ui/server.ts` (optional) | Turns on the login page. **Required** whenever the host is not loopback - the server refuses to start without it. |
+| `PR_REVIEW_UI_TRUST_PROXY` | `src/ui/server.ts` (optional) | Number of reverse proxies in front of the UI (1 with the bundled Caddy), so login attempts are limited per person. Leave unset without a proxy. |
 | `PR_REVIEW_UI_ALLOWED_HOSTS` / `PR_REVIEW_UI_COOKIE_SECURE` | `src/ui/server.ts` (optional) | Extra `Host` names to accept when shared on a network, and the `Secure` cookie flag for HTTPS. |
 | `PR_REVIEW_DATA_DIR` | `src/ui/server.ts` (optional) | Where the UI keeps its review history and auto-review state (default: the project folder). |
 
@@ -691,8 +692,9 @@ throttled attempts); it is not per-user. Serve it over HTTPS if you share it.
 
 - **Start with Windows:** `powershell -ExecutionPolicy Bypass -File scripts\windows\install-autostart.ps1`
   (current user only; add `-Remove` to undo). Ollama's own installer already starts Ollama at login.
-- **Docker:** `docker compose up -d --build` (needs `PR_REVIEW_UI_PASSWORD` in `.env`; reaches Ollama on
-  the host via `host.docker.internal`). Not yet built or run by the author - treat it as a starting point.
+- **Hosting for a team:** see [DEPLOYMENT.md](DEPLOYMENT.md) - `docker compose up -d --build` starts the UI behind
+  Caddy (automatic HTTPS) using the Claude API; `docker-compose.ollama.yml` swaps in a self-hosted Ollama. The Docker
+  files have not been run by their author - treat the first start as a test.
 - **Without the UI:** `npm run review -- --owner=O --repo=R --pr=N` (asks before posting) or
   `npm run watch` (reviews new PRs automatically and posts without asking).
 

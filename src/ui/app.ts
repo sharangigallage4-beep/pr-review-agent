@@ -55,6 +55,13 @@ export interface BuildUiAppOptions {
   localInputDir?: string;
   /** Injectable for tests - defaults to the real version comparison and review. */
   versionReview?: typeof runVersionReview;
+  /**
+   * Set this when the UI sits behind a reverse proxy (e.g. Caddy): the number of proxies in front of
+   * it, or a subnet list. Express then reads the real client address from X-Forwarded-For, so the
+   * login throttle counts each person separately instead of treating everyone as the proxy. Leave
+   * it unset when there is no proxy - a client could otherwise fake the header.
+   */
+  trustProxy?: boolean | number | string;
   /** Folder of convention .md files (the one the reviewer loads). Enables the rules editor. */
   conventionsDir?: string;
 }
@@ -80,6 +87,7 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
 
   const app = express();
   app.disable('x-powered-by');
+  if (options.trustProxy !== undefined) app.set('trust proxy', options.trustProxy);
 
   app.use((req: Request, res: Response, next: NextFunction) => {
     const host = (req.header('host') ?? '').toLowerCase();
@@ -124,7 +132,7 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
       res.json({ ok: true });
       return;
     }
-    const client = req.socket.remoteAddress ?? 'unknown';
+    const client = req.ip ?? req.socket.remoteAddress ?? 'unknown';
     if (auth.isBlocked(client)) {
       res.status(429).json({ error: 'Too many wrong passwords. Wait a minute and try again.' });
       return;

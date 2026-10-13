@@ -39,6 +39,9 @@ function main(): void {
     process.exitCode = 1;
     return;
   }
+  // PR_REVIEW_UI_TRUST_PROXY=1 when exactly one reverse proxy (Caddy, nginx) is in front of the UI.
+  const trustProxyRaw = (process.env.PR_REVIEW_UI_TRUST_PROXY ?? '').trim();
+  const trustProxy = trustProxyRaw === '' ? undefined : /^\d+$/.test(trustProxyRaw) ? Number(trustProxyRaw) : trustProxyRaw;
   const allowedHosts = (process.env.PR_REVIEW_UI_ALLOWED_HOSTS ?? '')
     .split(',')
     .map((h) => h.trim())
@@ -58,6 +61,7 @@ function main(): void {
     getStatus: () => readStatus(process.env),
     publicDir: path.join(here, 'public'),
     allowedHosts,
+    trustProxy,
     auth: password ? createAuth({ password, cookieSecure: process.env.PR_REVIEW_UI_COOKIE_SECURE === 'true' }) : undefined,
     auto: new AutoReviewer({ jobs, listPullRequests, stateFile: path.join(dataDir, '.ui-auto-state.json') }),
     conventionsDir: process.env.PR_REVIEW_CONVENTIONS_DIR || defaultConventionsDir(),
