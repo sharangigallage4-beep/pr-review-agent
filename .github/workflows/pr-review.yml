@@ -2,16 +2,25 @@ name: Automated PR Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
+    # ready_for_review: draft PRs are skipped (below), so review them when they stop being drafts.
+    types: [opened, synchronize, reopened, ready_for_review]
 
 # Least privilege: only what fetching a PR and posting a review actually needs.
 permissions:
   pull-requests: write
   contents: read
 
+# Several quick pushes to one PR must not each pay for a full review: a newer run replaces an older
+# one that is still going.
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   review:
     runs-on: ubuntu-latest
+    # A review should take a few minutes; this stops a stuck run from using minutes for hours.
+    timeout-minutes: 15
 
     # Infinite-loop prevention. Note this is a defensive extra, not the primary safeguard: posting
     # a PR review or comment does NOT itself produce a new commit, and does not open/reopen the
@@ -23,6 +32,7 @@ jobs:
     # GITHUB_TOKEN's actor is always "github-actions[bot]" - change both logins below if you
     # configure a custom bot account/PAT for GITHUB_TOKEN instead.
     if: >
+      github.event.pull_request.draft == false &&
       github.event.pull_request.user.login != 'github-actions[bot]' &&
       github.actor != 'github-actions[bot]'
 
@@ -100,6 +110,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # The model: set a repository variable named ANTHROPIC_MODEL to change it without editing
+          # this file (Settings -> Secrets and variables -> Actions -> Variables).
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL || 'claude-sonnet-5-5' }}
           PR_OWNER: ${{ github.repository_owner }}
           PR_REPO: ${{ github.event.repository.name }}
           PR_NUMBER: ${{ github.event.pull_request.number }}

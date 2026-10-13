@@ -77,8 +77,22 @@ The Docker files (`Dockerfile`, `docker-compose.yml`, `Caddyfile`) have **not be
 
 ## 5. Other ways
 
-- **No server at all:** `.github/workflows/pr-review.yml` runs the review in GitHub Actions with an
-  `ANTHROPIC_API_KEY` repository secret (no web UI). It is currently disabled in this repository's Actions tab.
+- **No server at all (the simplest):** `.github/workflows/pr-review.yml` runs the review inside GitHub Actions and
+  posts it on the pull request, using the Claude API. No web UI, no preview (it posts directly), no server, domain or
+  HTTPS to look after. Set up:
+  1. Create an Anthropic API key used only for this, and set a spending limit in the Anthropic console.
+  2. Repository **Settings -> Secrets and variables -> Actions -> Secrets -> New repository secret**: name
+     `ANTHROPIC_API_KEY`, value the key. (Optional, under **Variables**: `ANTHROPIC_MODEL`; the default is
+     `claude-sonnet-5-5`.)
+  3. **Actions** tab -> **Automated PR Review** -> **Enable workflow** (it may have been disabled).
+  4. Open a pull request, or push a commit to one that targets `main`. A run appears under Actions; the review
+     shows up as comments on the pull request. Draft pull requests are skipped; a new push cancels a still-running
+     review of the same PR.
+
+  Pull requests from forks never receive the secret (GitHub withholds it), so strangers cannot spend your API key;
+  their run simply fails. The workflow runs the trusted code of the PR's **base** commit, never the PR's own code.
+  The model's tag/naming findings and the other checks use the repository's `docs/conventions` as it is on the base
+  branch.
 - **Without Docker:** install Node 22, then `npm ci && npm run ui` with the same variables plus
   `PR_REVIEW_UI_HOST=127.0.0.1`, run it with systemd, and put Caddy or nginx in front of it
   (set `PR_REVIEW_UI_ALLOWED_HOSTS`, `PR_REVIEW_UI_COOKIE_SECURE=true`, `PR_REVIEW_UI_TRUST_PROXY=1`).
