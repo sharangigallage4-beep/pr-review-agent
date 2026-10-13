@@ -51,6 +51,19 @@ function buildReviewTool(): Anthropic.Tool {
 
 let sharedClient: Anthropic | undefined;
 
+/**
+ * Models that rejected a forced tool call ("tool_choice: type tool and any are not supported for this
+ * model" - newer Claude models that think before answering behave this way). Once a model has said so,
+ * requests for it go straight to automatic tool choice instead of failing first every time.
+ */
+const modelsWithoutForcedToolChoice = new Set<string>();
+
+function isForcedToolChoiceRejected(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const { status, message } = err as { status?: unknown; message?: unknown };
+  return status === 400 && typeof message === 'string' && /tool_choice/i.test(message);
+}
+
 function getAnthropicClient(): Anthropic {
   if (!sharedClient) {
     const { anthropicApiKey } = loadReviewConfig();
@@ -68,7 +81,7 @@ export interface RequestReviewParams {
 }
 
 /**
- * Calls the Claude Messages API with a forced `submit_review` tool call and returns its raw
+ * Calls the Claude Messages API with a `submit_review` tool call (forced where the model allows it) and returns its raw
  * (unvalidated) input. `client` is injectable so tests can supply a fake with no network access
  * and no ANTHROPIC_API_KEY set - `model` on its own is also enough to skip loadReviewConfig()
  * entirely when a client is supplied.
@@ -79,7 +92,7 @@ export async function requestReview(
 ): Promise<unknown> {
   const resolvedModel = model ?? loadReviewConfig().model;
 
-  const response = await client.messages.create({
+  const createMessage = (toolChoice: Anthropic.ToolChoice) => client.messages.create({
     model: resolvedModel,
     // 8000 was too low for real-world PRs: a large diff (many files, many genuine findings, each
     // needing an explanation and a suggested fix) can need more room than that to complete the
@@ -92,8 +105,24 @@ export async function requestReview(
     system: systemPrompt,
     messages: [{ role: 'user', content: userMessage }],
     tools: [buildReviewTool()],
-    tool_choice: { type: 'tool', name: REVIEW_TOOL_NAME },
+    tool_choice: toolChoice,
   });
+
+  // Force the submit_review call where the model allows it. Where it does not, fall back to automatic
+  // tool choice: the system prompt already requires the call, and a text answer in the same shape is
+  // still accepted below.
+  let response: Anthropic.Message;
+  if (modelsWithoutForcedToolChoice.has(resolvedModel)) {
+    response = await createMessage({ type: 'auto' });
+  } else {
+    try {
+      response = await createMessage({ type: 'tool', name: REVIEW_TOOL_NAME });
+    } catch (err) {
+      if (!isForcedToolChoiceRejected(err)) throw err;
+      modelsWithoutForcedToolChoice.add(resolvedModel);
+      response = await createMessage({ type: 'auto' });
+    }
+  }
 
   // Fail fast with a clear, specific diagnosis rather than letting a truncated tool call fall
   // through to a generic "missing required field" schema error downstream - stop_reason tells us

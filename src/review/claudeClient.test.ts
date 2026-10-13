@@ -90,3 +90,73 @@ describe('parseTextToolCall', () => {
     assert.equal(parseTextToolCall([]), undefined);
   });
 });
+
+describe('requestReview with a model that rejects a forced tool call', () => {
+  const rejection = () =>
+    Object.assign(
+      new Error('400 {"type":"error","error":{"type":"invalid_request_error","message":"tool_choice: type \\"tool\\" and \\"any\\" are not supported for this model."}}'),
+      { status: 400 }
+    );
+  const toolUse = (input: unknown) => ({ stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'submit_review', input }] });
+
+  test('retries with automatic tool choice and returns the tool call', async () => {
+    const choices: string[] = [];
+    const client = fakeClient(async (params) => {
+      const choice = (params as { tool_choice: { type: string } }).tool_choice.type;
+      choices.push(choice);
+      if (choice === 'tool') throw rejection();
+      return toolUse({ summary: 'ok', issues: [] });
+    });
+    const result = await requestReview({ ...baseParams, model: 'thinking-model-a' }, client);
+    assert.deepEqual(result, { summary: 'ok', issues: [] });
+    assert.deepEqual(choices, ['tool', 'auto']);
+  });
+
+  test('remembers the model, so later requests go straight to automatic tool choice', async () => {
+    const choices: string[] = [];
+    const client = fakeClient(async (params) => {
+      const choice = (params as { tool_choice: { type: string } }).tool_choice.type;
+      choices.push(choice);
+      if (choice === 'tool') throw rejection();
+      return toolUse({ summary: 'ok', issues: [] });
+    });
+    await requestReview({ ...baseParams, model: 'thinking-model-b' }, client);
+    await requestReview({ ...baseParams, model: 'thinking-model-b' }, client);
+    assert.deepEqual(choices, ['tool', 'auto', 'auto']);
+  });
+
+  test('a model that allows forced tool choice keeps getting it', async () => {
+    const choices: string[] = [];
+    const client = fakeClient(async (params) => {
+      choices.push((params as { tool_choice: { type: string } }).tool_choice.type);
+      return toolUse({ summary: 'ok', issues: [] });
+    });
+    await requestReview({ ...baseParams, model: 'plain-model' }, client);
+    await requestReview({ ...baseParams, model: 'plain-model' }, client);
+    assert.deepEqual(choices, ['tool', 'tool']);
+  });
+
+  test('other API errors are not swallowed by the fallback', async () => {
+    let calls = 0;
+    const client = fakeClient(async () => {
+      calls += 1;
+      throw Object.assign(new Error('401 {"error":{"type":"authentication_error","message":"invalid x-api-key"}}'), { status: 401 });
+    });
+    await assert.rejects(() => requestReview({ ...baseParams, model: 'model-c' }, client), /invalid x-api-key/);
+    assert.equal(calls, 1);
+
+    const overloaded = fakeClient(async () => {
+      throw Object.assign(new Error('400 {"error":{"message":"max_tokens: too large"}}'), { status: 400 });
+    });
+    await assert.rejects(() => requestReview({ ...baseParams, model: 'model-d' }, overloaded), /max_tokens/);
+  });
+
+  test('automatic choice may answer in text: that shape is still accepted', async () => {
+    const client = fakeClient(async (params) => {
+      if ((params as { tool_choice: { type: string } }).tool_choice.type === 'tool') throw rejection();
+      return { stop_reason: 'end_turn', content: [{ type: 'text', text: '{"name":"submit_review","arguments":{"summary":"s","issues":[]}}' }] };
+    });
+    assert.deepEqual(await requestReview({ ...baseParams, model: 'thinking-model-e' }, client), { summary: 's', issues: [] });
+  });
+});
+
