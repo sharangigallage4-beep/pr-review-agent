@@ -692,7 +692,8 @@ throttled attempts); it is not per-user. Serve it over HTTPS if you share it.
 
 - **Start with Windows:** `powershell -ExecutionPolicy Bypass -File scripts\windows\install-autostart.ps1`
   (current user only; add `-Remove` to undo). Ollama's own installer already starts Ollama at login.
-- **Hosting for a team:** see [DEPLOYMENT.md](DEPLOYMENT.md) - `docker compose up -d --build` starts the UI behind
+- **Hosting for a team:** see [DEPLOYMENT.md](DEPLOYMENT.md) - the easiest way is a hosting service that builds the
+  Dockerfile (Render, Railway, Fly.io; no server needed); alternatively `docker compose up -d --build` starts the UI behind
   Caddy (automatic HTTPS) using the Claude API; `docker-compose.ollama.yml` swaps in a self-hosted Ollama. The Docker
   files have not been run by their author - treat the first start as a test.
 - **Without the UI:** `npm run review -- --owner=O --repo=R --pr=N` (asks before posting) or

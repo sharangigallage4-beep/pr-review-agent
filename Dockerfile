@@ -12,9 +12,10 @@ RUN npm ci
 COPY . .
 
 # Review history and auto-review state live in a volume mounted here.
+# The port is deliberately not set: a hosting service passes PORT, and otherwise the app uses 4500
+# (which is what the Caddy in docker-compose.yml forwards to).
 ENV PR_REVIEW_DATA_DIR=/data \
-    PR_REVIEW_UI_HOST=0.0.0.0 \
-    PR_REVIEW_UI_PORT=4500
+    PR_REVIEW_UI_HOST=0.0.0.0
 RUN mkdir -p /data && chown -R node:node /data /app/docs
 
 USER node

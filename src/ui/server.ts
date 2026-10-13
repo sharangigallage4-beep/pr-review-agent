@@ -7,10 +7,9 @@ import { buildUiApp } from './app.js';
 import { createAuth } from './auth.js';
 import { AutoReviewer } from './autoReview.js';
 import { JobManager } from './jobs.js';
+import { isLoopbackHost, platformHosts, resolvePort } from './hostConfig.js';
 import { listenErrorMessage } from './listenError.js';
 import { listOpenPullRequests, readStatus } from './services.js';
-
-const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
 /**
  * Starts the review web UI (`npm run ui`). Listens on 127.0.0.1 only by default - the page can post
@@ -28,10 +27,10 @@ function main(): void {
     return;
   }
 
-  const port = Number(process.env.PR_REVIEW_UI_PORT) || 4500;
+  const port = resolvePort(process.env);
   const host = process.env.PR_REVIEW_UI_HOST || '127.0.0.1';
   const password = process.env.PR_REVIEW_UI_PASSWORD || '';
-  if (!LOOPBACK_HOSTS.has(host) && !password) {
+  if (!isLoopbackHost(host) && !password) {
     console.error(
       `Refusing to listen on ${host} without a password: anyone who can reach this page could post to GitHub with your token. ` +
         'Set PR_REVIEW_UI_PASSWORD (see .env.example), or leave PR_REVIEW_UI_HOST unset to keep it local.'
@@ -42,10 +41,14 @@ function main(): void {
   // PR_REVIEW_UI_TRUST_PROXY=1 when exactly one reverse proxy (Caddy, nginx) is in front of the UI.
   const trustProxyRaw = (process.env.PR_REVIEW_UI_TRUST_PROXY ?? '').trim();
   const trustProxy = trustProxyRaw === '' ? undefined : /^\d+$/.test(trustProxyRaw) ? Number(trustProxyRaw) : trustProxyRaw;
-  const allowedHosts = (process.env.PR_REVIEW_UI_ALLOWED_HOSTS ?? '')
-    .split(',')
-    .map((h) => h.trim())
-    .filter(Boolean);
+  const allowedHosts = [
+    ...(process.env.PR_REVIEW_UI_ALLOWED_HOSTS ?? '')
+      .split(',')
+      .map((h) => h.trim())
+      .filter(Boolean),
+    // A hosting service announces its public address itself (see hostConfig.ts).
+    ...platformHosts(process.env),
+  ];
 
   const here = path.dirname(fileURLToPath(import.meta.url));
   const root = path.join(here, '..', '..');

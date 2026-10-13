@@ -53,6 +53,49 @@ The Docker files (`Dockerfile`, `docker-compose.yml`, `Caddyfile`) have **not be
    request, check the preview, then **Post** or **Discard**. The **Auto-review** switch makes the server watch the
    repository itself.
 
+## 2b. The easy way: a hosting service that builds the Dockerfile (no server, SSH or domain)
+
+Services such as Render, Railway or Fly.io build this repository's `Dockerfile` for you, give the app a
+ready-made `https://...` address and take care of HTTPS. The UI recognises their `PORT` variable and their public
+host name automatically. The steps below are for **Render** (they are written without having used it for this project, and
+the button labels may differ a little):
+
+1. Prepare the secrets: a **new** fine-grained GitHub token (only the repositories to review; Pull requests: read and
+   write, Contents: read; with an expiry date), an Anthropic API key with a spending limit, and a long random password
+   for the UI.
+2. Sign in to render.com with your GitHub account. **New + -> Web Service**, pick this repository (a public one can be
+   pasted as a public Git repository URL).
+3. Settings: **Language / Runtime: Docker**, branch `main`, a small instance type. (A free instance may go to sleep
+   when nobody uses it and take about a minute to wake; a paid one stays on.) Optional, under Advanced: health check
+   path `/api/session`.
+4. **Environment variables:**
+
+   ```
+   PR_REVIEW_UI_PASSWORD=<the long random password>
+   PR_REVIEW_UI_COOKIE_SECURE=true
+   PR_REVIEW_UI_TRUST_PROXY=1
+   GITHUB_TOKEN=<the new token>
+   GITHUB_OWNER=<default owner>
+   GITHUB_REPO=<default repo>
+   ANTHROPIC_API_KEY=<the new key>
+   ANTHROPIC_MODEL=claude-sonnet-5-5
+   ```
+
+   Do **not** set `ANTHROPIC_BASE_URL` and do not set a port - Render supplies `PORT`.
+5. **Create Web Service.** When the build finishes, open the address Render shows (`https://<name>.onrender.com`)
+   and sign in with the password.
+
+Things to know:
+
+- The hosted UI cannot reach an Ollama on your own computer, so it uses the Claude API (your code goes to Anthropic).
+- Leave the UI's **Auto-review** switch off: the GitHub Actions workflow already reviews new pull requests, and a
+  free instance that is asleep would not run it anyway. Use the hosted UI for reviews you want to preview first.
+- Review history is kept on the instance's disk and is lost on every redeploy unless you attach a persistent disk
+  (usually a paid feature, mounted at `/data`). Edits made in the "Review rules" page are lost the same way - change
+  `docs/conventions/*.md` in git instead.
+- Every push to `main` redeploys it. Set `PR_REVIEW_UI_PASSWORD` to something long: it is the only protection.
+- Railway and Fly.io work the same way (they also pass `PORT`; their public host names are recognised too).
+
 ## 3. Running it
 
 | Task | Command |
