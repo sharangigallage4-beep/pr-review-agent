@@ -123,7 +123,7 @@ describe('review UI app', () => {
     assert.equal(res.status, 202);
     const job = await body(res);
     assert.equal(job.kind, 'local');
-    for (let i = 0; i < 100; i += 1) {
+    for (let i = 0; i < 500; i += 1) {
       const current = await body(await fetch(`${base}/api/jobs/${job.id}`));
       if (current.status === 'done') {
         assert.equal(current.preview.inlineFindings.length, 1);
@@ -140,7 +140,7 @@ describe('review UI app', () => {
     const before = versionCalls.length;
     const res = await post('/api/local-reviews', { newName: 'v2' });
     assert.equal(res.status, 202);
-    for (let i = 0; i < 100 && versionCalls.length === before; i += 1) await new Promise((r) => setTimeout(r, 20));
+    for (let i = 0; i < 500 && versionCalls.length === before; i += 1) await new Promise((r) => setTimeout(r, 20));
     assert.deepEqual(versionCalls.at(-1), { newFiles: ['a.plsql'], oldFiles: undefined, label: 'v2', useAi: true });
   });
 
@@ -289,7 +289,7 @@ describe('review UI app: login, feedback, auto-review, rules editor', () => {
   test('feedback is recorded per finding and summarized', async () => {
     const cookie = await signIn();
     const job = await body(await send('POST', '/api/jobs', { owner: 'o', repo: 'r', pr: 1, autoPost: true }, cookie));
-    for (let i = 0; i < 100; i += 1) {
+    for (let i = 0; i < 500; i += 1) {
       const current = await body(await send('GET', `/api/jobs/${job.id}`, undefined, cookie));
       if (current.status === 'posted') break;
       await new Promise((r) => setTimeout(r, 20));

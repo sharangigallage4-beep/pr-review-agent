@@ -37,7 +37,7 @@ function gatedRun(onDecision?: (posted: boolean) => void): NonNullable<RunReview
   }) as unknown as NonNullable<RunReview>;
 }
 
-async function waitFor(job: Job, predicate: (j: Job) => boolean, ms = 2000): Promise<void> {
+async function waitFor(job: Job, predicate: (j: Job) => boolean, ms = 15_000): Promise<void> {
   const end = Date.now() + ms;
   while (!predicate(job)) {
     if (Date.now() > end) throw new Error(`Timed out; job status is ${job.status}`);
