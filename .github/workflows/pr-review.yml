@@ -69,10 +69,15 @@ jobs:
       # runs. Since this tool only ever reads the PR's diff over the GitHub API (see
       # github/prService.ts) - it never needs the PR's own files checked out locally at all -
       # pinning to the base commit costs nothing functionally and closes that off completely.
-      - name: Checkout pr-review-agent (pinned to the trusted base commit, not the PR's own code)
+      # NOTE on which base commit: this is the CURRENT tip of the PR's base branch, not
+      # github.event.pull_request.base.sha. That SHA is frozen at the moment the PR was opened, so an
+      # older PR would be reviewed by the outdated reviewer code from back then (and miss every fix
+      # made to `main` since). The base branch is exactly as trusted as that frozen commit - only people
+      # with write access can change it, and the PR's own code is still never checked out.
+      - name: Checkout pr-review-agent (the trusted base branch, not the PR's own code)
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Set up Node
         uses: actions/setup-node@v4
