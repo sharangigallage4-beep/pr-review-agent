@@ -164,6 +164,23 @@ describe('POST /webhooks/github - event handling', () => {
   });
 });
 
+describe('GET /health', () => {
+  test('answers {"status":"ok"} without any credentials, for platform health checks', async () => {
+    await withServer({}, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/health`);
+      assert.equal(res.status, 200);
+      assert.deepEqual(await res.json(), { status: 'ok' });
+    });
+  });
+
+  test('an unsigned webhook is still rejected (the health route does not weaken it)', async () => {
+    await withServer({}, async (baseUrl) => {
+      const res = await fetch(`${baseUrl}/webhooks/github`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      assert.equal(res.status, 401);
+    });
+  });
+});
+
 describe('GET /webhooks/status', () => {
   test('reflects a review that has already completed', async () => {
     const statusStore = new ReviewStatusStore();

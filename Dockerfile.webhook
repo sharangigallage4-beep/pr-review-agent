@@ -1,0 +1,21 @@
+# The GitHub webhook server (automatic PR reviews), for hosts such as Northflank that build a Dockerfile.
+# Point the service at this file ("Dockerfile location: /Dockerfile.webhook"). See DEPLOYMENT-NORTHFLANK.md.
+# (The Dockerfile next to it runs the web UI instead.)
+FROM node:22-slim
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+
+# Compile, then drop the development dependencies: the compiled server needs only the runtime ones.
+RUN npm run build && npm prune --omit=dev
+
+ENV NODE_ENV=production
+USER node
+
+# The port comes from the PORT variable (set it to 4000 in the host and publish that port).
+EXPOSE 4000
+CMD ["node", "dist/webhook/server.js"]

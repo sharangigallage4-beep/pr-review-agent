@@ -90,6 +90,12 @@ export function buildWebhookApp(options: BuildWebhookAppOptions): Express {
     }
   );
 
+  // For hosting platforms' health checks and a quick "is it up?" check in a browser. It answers
+  // without any secret, and says nothing about the configuration.
+  app.get('/health', (_req: Request, res: Response) => {
+    res.status(200).json({ status: 'ok' });
+  });
+
   app.get('/webhooks/status', (_req: Request, res: Response) => {
     res.status(200).json(statusStore.list());
   });

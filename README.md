@@ -697,6 +697,9 @@ throttled attempts); it is not per-user. Serve it over HTTPS if you share it.
   Dockerfile (Render, Railway, Fly.io; no server needed); alternatively `docker compose up -d --build` starts the UI behind
   Caddy (automatic HTTPS) using the Claude API; `docker-compose.ollama.yml` swaps in a self-hosted Ollama. The Docker
   files have not been run by their author - treat the first start as a test.
+- **Always-on webhook backend (Northflank):** see [DEPLOYMENT-NORTHFLANK.md](DEPLOYMENT-NORTHFLANK.md) - the
+  `npm run webhook` server (`Dockerfile.webhook`, `/health`) reviewing pull requests as GitHub sends them; use it **instead of**
+  the GitHub Actions workflow for the same repository, not together.
 - **Without the UI:** `npm run review -- --owner=O --repo=R --pr=N` (asks before posting) or
   `npm run watch` (reviews new PRs automatically and posts without asking).
 
