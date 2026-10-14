@@ -1,3 +1,4 @@
+import { request as httpRequest } from 'node:http';
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
@@ -531,5 +532,40 @@ describe('review UI app: choosing the AI', () => {
     const url = (globalThis as { __noFeature?: string }).__noFeature as string;
     assert.deepEqual(await (await fetch(`${url}/api/provider`)).json(), { available: false, selected: null, providers: [] });
     assert.equal((await post(url, { id: 'claude' })).status, 404);
+  });
+});
+
+describe('review UI app: health check', () => {
+  test('answers without a login and for any host name, and reveals nothing else', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ui-health-'));
+    writeFileSync(path.join(dir, 'index.html'), 'x');
+    const app = buildUiApp({
+      jobs: new JobManager({ echo: silent }),
+      publicDir: dir,
+      listPullRequests: async () => [],
+      getStatus: async () => ({ github: { configured: true }, model: { kind: 'anthropic' } }),
+      auth: createAuth({ password: 'open sesame' }),
+    });
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise((r) => server.once('listening', r));
+    try {
+      const port = (server.address() as AddressInfo).port;
+      // A hosting service's checker calls the container by its own address, not the public host name.
+      const { statusCode, body } = await new Promise<{ statusCode?: number; body: string }>((resolve, reject) => {
+        const req = httpRequest({ host: '127.0.0.1', port, path: '/health', headers: { host: '10.1.2.3:4500' } }, (res) => {
+          let data = '';
+          res.on('data', (c) => (data += c));
+          res.on('end', () => resolve({ statusCode: res.statusCode, body: data }));
+        });
+        req.on('error', reject);
+        req.end();
+      });
+      assert.equal(statusCode, 200);
+      assert.deepEqual(JSON.parse(body), { status: 'ok' });
+      assert.equal((await fetch(`http://127.0.0.1:${port}/api/status`)).status, 401, 'everything else still needs the login');
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

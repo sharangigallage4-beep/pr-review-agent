@@ -107,6 +107,12 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
   app.disable('x-powered-by');
   if (options.trustProxy !== undefined) app.set('trust proxy', options.trustProxy);
 
+  // For a hosting service's health check: before the host and login checks, because the checker calls
+  // the container directly (by its own address, without a password). It reveals nothing.
+  app.get('/health', (_req: Request, res: Response) => {
+    res.json({ status: 'ok' });
+  });
+
   app.use((req: Request, res: Response, next: NextFunction) => {
     const host = (req.header('host') ?? '').toLowerCase();
     if (!LOCAL_HOSTS.has(hostWithoutPort(host)) && !allowedHosts.has(host) && !originHosts.has(host)) {
