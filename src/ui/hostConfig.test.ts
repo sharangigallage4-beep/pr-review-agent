@@ -76,6 +76,8 @@ describe('defaults on a hosting service', () => {
     assert.equal(resolveTrustProxy(env(render)), 1);
     assert.equal(resolveTrustProxy(env({})), undefined);
     assert.equal(resolveTrustProxy(env({ PR_REVIEW_UI_TRUST_PROXY: '2' })), 2);
+    assert.equal(resolveTrustProxy(env({ PR_REVIEW_UI_TRUST_PROXY: 'true' })), 1, 'true must not reach Express as an address');
+    assert.equal(resolveTrustProxy(env({ PR_REVIEW_UI_TRUST_PROXY: 'False' })), undefined);
     assert.equal(resolveTrustProxy(env({ ...render, PR_REVIEW_UI_TRUST_PROXY: 'loopback' })), 'loopback');
   });
 });

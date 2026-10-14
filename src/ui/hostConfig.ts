@@ -31,6 +31,9 @@ export function resolveCookieSecure(env: NodeJS.ProcessEnv): boolean {
 export function resolveTrustProxy(env: NodeJS.ProcessEnv): number | string | undefined {
   const raw = (env.PR_REVIEW_UI_TRUST_PROXY ?? '').trim();
   if (raw === '') return isHostedPlatform(env) ? 1 : undefined;
+  // "true"/"false" are not addresses (Express would crash on them at start-up): true means one proxy.
+  if (/^true$/i.test(raw)) return 1;
+  if (/^false$/i.test(raw)) return undefined;
   return /^\d+$/.test(raw) ? Number(raw) : raw;
 }
 
