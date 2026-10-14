@@ -13,3 +13,4 @@ dist
 docs/conventions/customer-solution
 local-input
 *.zip
+.ui-provider.json

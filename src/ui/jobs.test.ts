@@ -264,3 +264,62 @@ describe('JobManager local reviews', () => {
     }
   });
 });
+
+describe('JobManager AI provider', () => {
+  const fakeWorkflow = (record: (deps: { hasReviewer: boolean }) => void) =>
+    (async (_o: string, _r: string, _n: number, overrides: { runClaudeReview?: unknown }) => {
+      record({ hasReviewer: typeof overrides.runClaudeReview === 'function' });
+      return { status: 'skipped', reason: 'no_reviewable_files' };
+    }) as never;
+
+  test('a review takes the provider selected when it starts, and keeps it if the selection changes later', async () => {
+    let selected: 'ollama' | 'claude' = 'ollama';
+    const asked: string[] = [];
+    const jobs = new JobManager({
+      runReview: fakeWorkflow(() => {}),
+      echo: silent,
+      defaultProvider: () => selected,
+      reviewerFor: (id) => {
+        asked.push(id);
+        return (async () => ({ summary: 's', issues: [] })) as never;
+      },
+    });
+    const first = jobs.start('acme', 'w', 1);
+    selected = 'claude';
+    const second = jobs.start('acme', 'w', 2);
+    await waitFor(first, (j) => j.status === 'skipped');
+    await waitFor(second, (j) => j.status === 'skipped');
+    assert.deepEqual([first.provider, second.provider], ['ollama', 'claude']);
+    assert.deepEqual(asked, ['ollama', 'claude']);
+  });
+
+  test('an explicit provider wins over the default', async () => {
+    const jobs = new JobManager({ runReview: fakeWorkflow(() => {}), echo: silent, defaultProvider: () => 'ollama', reviewerFor: () => (async () => ({ summary: 's', issues: [] })) as never });
+    const job = jobs.start('acme', 'w', 3, false, 'claude');
+    assert.equal(job.provider, 'claude');
+    await waitFor(job, (j) => j.status === 'skipped');
+  });
+
+  test('a provider that cannot be used fails that review with its own message', async () => {
+    const jobs = new JobManager({
+      runReview: fakeWorkflow(() => {}),
+      echo: silent,
+      defaultProvider: () => 'claude',
+      reviewerFor: () => {
+        throw new Error('There is no Claude API key. Add CLAUDE_API_KEY=... to the .env file and restart the server.');
+      },
+    });
+    const job = jobs.start('acme', 'w', 4);
+    await waitFor(job, (j) => j.status === 'failed');
+    assert.match(job.error ?? '', /CLAUDE_API_KEY/);
+  });
+
+  test('without provider options the workflow is called exactly as before', async () => {
+    let hasReviewer: boolean | undefined;
+    const jobs = new JobManager({ runReview: fakeWorkflow((d) => (hasReviewer = d.hasReviewer)), echo: silent });
+    const job = jobs.start('acme', 'w', 5);
+    await waitFor(job, (j) => j.status === 'skipped');
+    assert.equal(hasReviewer, false);
+    assert.equal(job.provider, undefined);
+  });
+});

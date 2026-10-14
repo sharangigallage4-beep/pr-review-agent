@@ -160,3 +160,16 @@ describe('requestReview with a model that rejects a forced tool call', () => {
   });
 });
 
+describe('requestReview with an explicit provider', () => {
+  const toolUse = (input: unknown) => ({ stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'submit_review', input }] });
+
+  test('asks the provider\'s model, not the one from the environment', async () => {
+    let model: unknown;
+    const client = fakeClient(async (params) => {
+      model = (params as { model: string }).model;
+      return toolUse({ summary: 'ok', issues: [] });
+    });
+    await requestReview({ ...baseParams, model: 'from-env', provider: { id: 'claude', apiKey: 'k', baseURL: 'https://api.anthropic.com', model: 'claude-sonnet-5-5' } }, client);
+    assert.equal(model, 'claude-sonnet-5-5');
+  });
+});

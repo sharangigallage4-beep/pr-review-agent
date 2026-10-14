@@ -9,6 +9,7 @@ import { buildUiApp } from './app.js';
 import { JobManager } from './jobs.js';
 import { createAuth } from './auth.js';
 import { AutoReviewer } from './autoReview.js';
+import { ProviderSettings } from './providerSettings.js';
 import { readStatus } from './services.js';
 
 const silent = { info() {}, warn() {}, error() {} };
@@ -439,5 +440,96 @@ describe('review UI app: a separate website (Netlify) fronting the server', () =
     } finally {
       s.close();
     }
+  });
+});
+
+describe('readStatus for the provider chosen in the UI', () => {
+  const ollamaUp = (async () => ({ ok: true, json: async () => ({ models: [{ name: 'q:latest' }] }) })) as unknown as typeof fetch;
+  const neverCalled = (async () => {
+    throw new Error('Claude must not be probed - that would cost money');
+  }) as unknown as typeof fetch;
+
+  test('Claude is described by its key, without any request', async () => {
+    const withKey = await readStatus({ CLAUDE_API_KEY: 'k', CLAUDE_MODEL: 'claude-sonnet-5-5' } as NodeJS.ProcessEnv, neverCalled, 'claude');
+    assert.deepEqual([withKey.model.kind, withKey.model.name, withKey.model.reachable], ['anthropic', 'claude-sonnet-5-5', undefined]);
+    const withoutKey = await readStatus({} as NodeJS.ProcessEnv, neverCalled, 'claude');
+    assert.equal(withoutKey.model.reachable, false);
+  });
+
+  test('Ollama is probed at its own address with its own model', async () => {
+    const status = await readStatus({ OLLAMA_BASE_URL: 'http://localhost:11434', OLLAMA_MODEL: 'q' } as NodeJS.ProcessEnv, ollamaUp, 'ollama');
+    assert.deepEqual([status.model.kind, status.model.name, status.model.reachable, status.model.modelInstalled], ['ollama', 'q', true, true]);
+  });
+});
+
+describe('review UI app: choosing the AI', () => {
+  let server: Server;
+  let base: string;
+  let dir: string;
+
+  before(async () => {
+    dir = mkdtempSync(path.join(tmpdir(), 'ui-provider-'));
+    writeFileSync(path.join(dir, 'index.html'), 'x');
+    const providers = new ProviderSettings({ CLAUDE_API_KEY: 'sk-ant-secret-value', OLLAMA_BASE_URL: 'http://localhost:11434', AI_PROVIDER: 'ollama' } as NodeJS.ProcessEnv);
+    const noClaude = new ProviderSettings({ OLLAMA_BASE_URL: 'http://localhost:11434' } as NodeJS.ProcessEnv);
+    const make = (settings?: ProviderSettings) =>
+      buildUiApp({
+        jobs: new JobManager({ echo: silent }),
+        publicDir: dir,
+        listPullRequests: async () => [],
+        getStatus: async () => ({ github: { configured: true }, model: { kind: 'anthropic' } }),
+        providers: settings,
+      });
+    const a = make(providers).listen(0, '127.0.0.1');
+    const b = make(noClaude).listen(0, '127.0.0.1');
+    const c = make(undefined).listen(0, '127.0.0.1');
+    server = a;
+    await Promise.all([a, b, c].map((s) => new Promise((r) => s.once('listening', r))));
+    const url = (s: Server) => `http://127.0.0.1:${(s.address() as AddressInfo).port}`;
+    base = url(a);
+    (globalThis as { __noClaude?: string; __noFeature?: string; __extra?: Server[] }).__noClaude = url(b);
+    (globalThis as { __noFeature?: string }).__noFeature = url(c);
+    (globalThis as { __extra?: Server[] }).__extra = [b, c];
+  });
+
+  after(() => {
+    server.close();
+    (globalThis as { __extra?: Server[] }).__extra?.forEach((s) => s.close());
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const post = (url: string, body: unknown) => fetch(`${url}/api/provider`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+  test('lists both providers with the selected one, and never includes a key', async () => {
+    const res = await fetch(`${base}/api/provider`);
+    const text = await res.text();
+    const data = JSON.parse(text);
+    assert.equal(data.selected, 'ollama');
+    assert.deepEqual(data.providers.map((p: { id: string; available: boolean }) => [p.id, p.available]), [['ollama', true], ['claude', true]]);
+    assert.equal(text.includes('sk-ant-secret-value'), false);
+  });
+
+  test('switches the provider and reports the new selection', async () => {
+    const res = await post(base, { id: 'claude' });
+    assert.equal(res.status, 200);
+    assert.equal(((await res.json()) as { selected: string }).selected, 'claude');
+    assert.equal(((await (await fetch(`${base}/api/provider`)).json()) as { selected: string }).selected, 'claude');
+    await post(base, { id: 'ollama' });
+  });
+
+  test('refuses an unknown provider, and Claude without a key (with the reason)', async () => {
+    assert.equal((await post(base, { id: 'gemini' })).status, 400);
+    assert.equal((await post(base, {})).status, 400);
+    const noClaude = (globalThis as { __noClaude?: string }).__noClaude as string;
+    const res = await post(noClaude, { id: 'claude' });
+    assert.equal(res.status, 400);
+    assert.match(((await res.json()) as { error: string }).error, /CLAUDE_API_KEY/);
+    assert.equal(((await (await fetch(`${noClaude}/api/provider`)).json()) as { selected: string }).selected, 'ollama');
+  });
+
+  test('without the feature configured the route says so', async () => {
+    const url = (globalThis as { __noFeature?: string }).__noFeature as string;
+    assert.deepEqual(await (await fetch(`${url}/api/provider`)).json(), { available: false, selected: null, providers: [] });
+    assert.equal((await post(url, { id: 'claude' })).status, 404);
   });
 });

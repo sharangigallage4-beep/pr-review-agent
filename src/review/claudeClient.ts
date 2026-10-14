@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { loadReviewConfig } from './config.js';
+import type { ResolvedProvider } from './providers.js';
 import { SEVERITY_LEVELS } from './types.js';
 
 const REVIEW_TOOL_NAME = 'submit_review';
@@ -50,6 +51,21 @@ function buildReviewTool(): Anthropic.Tool {
 }
 
 let sharedClient: Anthropic | undefined;
+const providerClients = new Map<string, Anthropic>();
+
+/** One SDK client per provider (address + key), created on first use. */
+function clientFor(provider: ResolvedProvider): Anthropic {
+  const key = `${provider.baseURL}
+${provider.apiKey}`;
+  let client = providerClients.get(key);
+  if (!client) {
+    // baseURL is always given explicitly: otherwise the SDK would pick up ANTHROPIC_BASE_URL from the
+    // environment, which would send a Claude request to the Ollama address.
+    client = new Anthropic({ apiKey: provider.apiKey, baseURL: provider.baseURL });
+    providerClients.set(key, client);
+  }
+  return client;
+}
 
 /**
  * Models that rejected a forced tool call ("tool_choice: type tool and any are not supported for this
@@ -77,6 +93,8 @@ export interface RequestReviewParams {
   userMessage: string;
   /** Overrides ANTHROPIC_MODEL/the default model. Mainly for tests - avoids needing config at all. */
   model?: string;
+  /** Which server and model to ask (Claude or Ollama). When given it replaces `model` and the environment. */
+  provider?: ResolvedProvider;
   maxTokens?: number;
 }
 
@@ -87,10 +105,11 @@ export interface RequestReviewParams {
  * entirely when a client is supplied.
  */
 export async function requestReview(
-  { systemPrompt, userMessage, model, maxTokens }: RequestReviewParams,
-  client: Anthropic = getAnthropicClient()
+  { systemPrompt, userMessage, model, maxTokens, provider }: RequestReviewParams,
+  injectedClient?: Anthropic
 ): Promise<unknown> {
-  const resolvedModel = model ?? loadReviewConfig().model;
+  const client = injectedClient ?? (provider ? clientFor(provider) : getAnthropicClient());
+  const resolvedModel = provider?.model ?? model ?? loadReviewConfig().model;
 
   const createMessage = (toolChoice: Anthropic.ToolChoice) => client.messages.create({
     model: resolvedModel,

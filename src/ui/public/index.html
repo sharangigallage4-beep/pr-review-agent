@@ -49,6 +49,8 @@
   .tagline { margin: 2px 0 0; font-size: 13.5px; opacity: .85; }
   .chips { display: flex; flex-wrap: wrap; gap: 8px; }
   .chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px; background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.22); font-size: 13px; color: #fff; }
+  select.chip { appearance: auto; font-family: inherit; }
+  select.chip option { color: #111; background: #fff; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #b8c0d4; flex: none; }
   .dot.ok { background: #5be3a0; box-shadow: 0 0 0 3px rgba(91,227,160,.25); }
   .dot.bad { background: #ff8f84; box-shadow: 0 0 0 3px rgba(255,143,132,.25); }
@@ -328,13 +330,35 @@
       else { label = 'AI model: Ollama · ' + (m.name || 'default'); cls = 'ok'; }
     } else { label = 'AI model: Anthropic API' + (m.name ? ' · ' + m.name : ''); cls = 'ok'; }
     chips.appendChild(el('span', { class: 'chip', title: m.baseUrl || '' }, el('span', { class: 'dot ' + cls }), label));
+    if (state.providers && state.providers.available) chips.insertBefore(providerPicker(), chips.firstChild);
     chips.appendChild(el('span', { class: 'chip' }, el('span', { class: 'dot ' + (s.github.configured ? 'ok' : 'bad') }),
       s.github.configured ? 'GitHub connected' : 'GitHub token missing'));
     chips.appendChild(el('button', { class: 'chip', style: 'cursor:pointer', title: 'Switch between automatic, light and dark', text: 'Theme: ' + theme, on: { click: cycleTheme } }));
     if (state.authRequired) chips.appendChild(el('button', { class: 'chip', style: 'cursor:pointer', text: 'Sign out', on: { click: signOut } }));
   }
+  // The AI chooser: Ollama (this computer) or Claude (API). Unavailable ones are greyed out with the reason.
+  function providerPicker() {
+    var sel = el('select', { class: 'chip', style: 'cursor:pointer', title: 'Which AI writes the reviews', 'aria-label': 'AI provider' });
+    state.providers.providers.forEach(function (p) {
+      var o = el('option', { text: p.label + ' · ' + p.model + (p.available ? '' : ' (not set up)') });
+      o.value = p.id;
+      o.disabled = !p.available;
+      if (!p.available && p.reason) o.title = p.reason;
+      if (p.id === state.providers.selected) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.addEventListener('change', function () {
+      api('/api/provider', { method: 'POST', body: { id: sel.value } })
+        .then(function (r) { state.providers.selected = r.selected; return refreshStatus(); })
+        .catch(function (err) { window.alert(err.message || 'Could not switch the AI.'); return refreshStatus(); });
+    });
+    return sel;
+  }
   function refreshStatus() {
-    return api('/api/status').then(renderStatus).catch(function () {
+    return api('/api/provider').catch(function () { return null; }).then(function (p) {
+      state.providers = p;
+      return api('/api/status');
+    }).then(renderStatus).catch(function () {
       renderStatus({ model: { kind: 'ollama', reachable: false }, github: { configured: false } });
     });
   }
@@ -548,7 +572,7 @@
     panel.hidden = false;
     panel.textContent = '';
     panel.appendChild(el('div', { class: 'panel-head' },
-      el('span', { class: 'panel-title', text: job.kind === 'local' ? 'Local review · ' + job.label : job.owner + '/' + job.repo + ' · PR #' + job.pr }),
+      el('span', { class: 'panel-title', text: (job.kind === 'local' ? 'Local review · ' + job.label : job.owner + '/' + job.repo + ' · PR #' + job.pr) + (job.provider ? ' · ' + (job.provider === 'claude' ? 'Claude' : 'Ollama') : '') }),
       el('span', { class: 'badge ' + job.status, text: STATUS_TEXT[job.status] })));
 
     if (job.status === 'queued' || job.status === 'running') {

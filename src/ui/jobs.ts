@@ -4,6 +4,8 @@ import { reviewPullRequest } from '../workflow/reviewPullRequestWorkflow.js';
 import type { ReviewPreview, ReviewPullRequestOutcome } from '../workflow/reviewPullRequestWorkflow.js';
 import { consoleLogger, toSafeLogFields } from '../workflow/logger.js';
 import type { ReviewIssue } from '../review/types.js';
+import type { ProviderId } from '../review/providers.js';
+import type { ReviewPullRequestDeps } from '../workflow/reviewPullRequestWorkflow.js';
 
 export type JobStatus =
   | 'queued'
@@ -32,6 +34,8 @@ export interface Job {
   pr: number;
   /** When true the review is posted as soon as it is ready, without waiting for the user. */
   autoPost: boolean;
+  /** Which AI the review asked (fixed when the review was started, so a later switch does not change it). */
+  provider?: ProviderId;
   status: JobStatus;
   createdAt: string;
   log: JobLogLine[];
@@ -68,6 +72,13 @@ export interface JobManagerOptions {
   echo?: typeof consoleLogger;
   /** JSON file the review history is kept in, so it survives a restart. Omit for memory only. */
   historyFile?: string;
+  /** The provider a new review uses (read when the review starts). Omit to use the environment, as before. */
+  defaultProvider?: () => ProviderId;
+  /**
+   * Builds the review function for a provider; it may throw a message for the user (for example when
+   * the Claude key is missing), which then fails that review with that message.
+   */
+  reviewerFor?: (provider: ProviderId) => ReviewPullRequestDeps['runClaudeReview'];
 }
 
 const MAX_LOG_LINES = 200;
@@ -87,9 +98,13 @@ export class JobManager {
   private readonly confirmTimeoutMs: number;
   private readonly echo: typeof consoleLogger;
   private readonly historyFile: string | undefined;
+  private readonly defaultProvider: (() => ProviderId) | undefined;
+  private readonly reviewerFor: JobManagerOptions['reviewerFor'];
 
   constructor(options: JobManagerOptions = {}) {
     this.historyFile = options.historyFile;
+    this.defaultProvider = options.defaultProvider;
+    this.reviewerFor = options.reviewerFor;
     this.loadHistory();
     this.runReview = options.runReview ?? reviewPullRequest;
     this.confirmTimeoutMs = options.confirmTimeoutMs ?? 12 * 60 * 60_000;
@@ -116,7 +131,7 @@ export class JobManager {
     );
   }
 
-  start(owner: string, repo: string, pr: number, autoPost = false): Job {
+  start(owner: string, repo: string, pr: number, autoPost = false, provider?: ProviderId): Job {
     const existing = this.activeFor(owner, repo, pr);
     if (existing) return existing;
 
@@ -126,6 +141,7 @@ export class JobManager {
       repo,
       pr,
       autoPost,
+      provider: provider ?? this.defaultProvider?.(),
       status: 'queued',
       createdAt: new Date().toISOString(),
       log: [],
@@ -262,8 +278,11 @@ export class JobManager {
     };
 
     try {
+      // The provider is looked up here, inside the try block, so a missing key fails this review with a clear message.
+      const runClaudeReview = job.provider && this.reviewerFor ? this.reviewerFor(job.provider) : undefined;
       const outcome = await this.runReview(job.owner, job.repo, job.pr, {
         logger,
+        ...(runClaudeReview ? { runClaudeReview } : {}),
         confirmBeforePosting: (preview) => {
           job.preview = preview;
           if (job.autoPost) return true;

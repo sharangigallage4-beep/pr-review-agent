@@ -7,6 +7,8 @@ import type { Auth } from './auth.js';
 import type { AutoReviewer } from './autoReview.js';
 import { LocalInputError, listLocalInputs, loadLocalInput } from './localInput.js';
 import { runVersionReview } from './versionReview.js';
+import { ProviderError } from '../review/providers.js';
+import type { ProviderSettings } from './providerSettings.js';
 import { ConventionError, deleteConventionDoc, listConventionDocs, saveConventionDoc } from './conventionsStore.js';
 
 export interface PullRequestSummary {
@@ -49,6 +51,8 @@ export interface BuildUiAppOptions {
   allowedHosts?: string[];
   /** When set, every /api route except login needs a signed-in session. */
   auth?: Auth;
+  /** Which AI (Ollama or Claude) new reviews use, with the UI's switch. */
+  providers?: ProviderSettings;
   /** Enables the "auto-review new PRs" switch. */
   auto?: AutoReviewer;
   /** The folder whose sub-folders and .zip files can be reviewed from the page (never any other path). */
@@ -190,7 +194,7 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
       // handled here instead of reaching Express's default error page (which would show a stack trace).
       Promise.resolve().then(() => fn(req, res)).catch((err: unknown) => {
         if (res.headersSent) return;
-        if (err instanceof ConventionError || err instanceof LocalInputError) {
+        if (err instanceof ConventionError || err instanceof LocalInputError || err instanceof ProviderError) {
           res.status(400).json({ error: err.message });
           return;
         }
@@ -318,6 +322,28 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
         );
       });
       res.status(202).json(job);
+    })
+  );
+
+  const providerState = () =>
+    options.providers
+      ? { available: true, selected: options.providers.get(), providers: options.providers.list() }
+      : { available: false, selected: null, providers: [] };
+
+  // Only names, models and whether each can be used - never a key.
+  app.get('/api/provider', (_req, res) => {
+    res.json(providerState());
+  });
+
+  app.post(
+    '/api/provider',
+    handle((req, res) => {
+      if (!options.providers) {
+        res.status(404).json({ error: 'Choosing the AI is not available on this server.' });
+        return;
+      }
+      options.providers.set((req.body as { id?: unknown } | undefined)?.id);
+      res.json(providerState());
     })
   );
 

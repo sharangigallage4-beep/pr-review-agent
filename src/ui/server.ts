@@ -7,6 +7,8 @@ import { buildUiApp } from './app.js';
 import { createAuth } from './auth.js';
 import { AutoReviewer } from './autoReview.js';
 import { JobManager } from './jobs.js';
+import { ProviderSettings } from './providerSettings.js';
+import { resolveProvider, reviewerFor } from '../review/providers.js';
 import { isLoopbackHost, platformHosts, resolveCookieSecure, resolveHost, resolvePort, resolveTrustProxy } from './hostConfig.js';
 import { listenErrorMessage } from './listenError.js';
 import { listOpenPullRequests, readStatus } from './services.js';
@@ -61,13 +63,20 @@ function main(): void {
   // Where the review history and auto-review state are kept. Defaults to the project folder; a
   // container sets PR_REVIEW_DATA_DIR to a mounted volume so they survive the container being replaced.
   const dataDir = process.env.PR_REVIEW_DATA_DIR || root;
-  const jobs = new JobManager({ historyFile: path.join(dataDir, '.review-history.json') });
+  const providers = new ProviderSettings(process.env, path.join(dataDir, '.ui-provider.json'));
+  const jobs = new JobManager({
+    historyFile: path.join(dataDir, '.review-history.json'),
+    // Each review asks whichever AI is selected when it starts (the dropdown in the page).
+    defaultProvider: () => providers.get(),
+    reviewerFor: (id) => reviewerFor(resolveProvider(id, process.env)),
+  });
   const listPullRequests = (owner: string, repo: string) => listOpenPullRequests(owner, repo, token);
 
   const app = buildUiApp({
     jobs,
     listPullRequests,
-    getStatus: () => readStatus(process.env),
+    getStatus: () => readStatus(process.env, fetch, providers.get()),
+    providers,
     publicDir: path.join(here, 'public'),
     allowedHosts,
     allowedOrigins,

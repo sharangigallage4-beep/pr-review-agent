@@ -1,5 +1,7 @@
 import { withRetry } from '../webhook/retry.js';
 import { isTransientRead } from '../workflow/githubRetry.js';
+import { listProviders, ollamaBaseUrl } from '../review/providers.js';
+import type { ProviderId } from '../review/providers.js';
 import type { AppStatus, PullRequestSummary } from './app.js';
 
 const GITHUB_TIMEOUT_MS = 15_000;
@@ -69,22 +71,7 @@ export async function listOpenPullRequests(
   }));
 }
 
-/**
- * Reports what the review will talk to: GitHub config, and the model. When ANTHROPIC_BASE_URL is
- * set the model is treated as an Ollama server and probed (is it up, is the chosen model pulled);
- * otherwise it is the hosted Anthropic API, which is not probed.
- */
-export async function readStatus(env: NodeJS.ProcessEnv, fetchFn: typeof fetch = fetch): Promise<AppStatus> {
-  const github: AppStatus['github'] = {
-    configured: Boolean(env.GITHUB_TOKEN),
-    owner: env.GITHUB_OWNER || undefined,
-    repo: env.GITHUB_REPO || undefined,
-  };
-
-  const baseUrl = env.ANTHROPIC_BASE_URL || undefined;
-  const name = env.ANTHROPIC_MODEL || undefined;
-  if (!baseUrl) return { github, model: { kind: 'anthropic', name } };
-
+async function probeOllama(baseUrl: string, name: string | undefined, fetchFn: typeof fetch, github: AppStatus['github']): Promise<AppStatus> {
   try {
     const res = await fetchFn(`${baseUrl.replace(/\/+$/, '')}/api/tags`, { signal: AbortSignal.timeout(3000) });
     if (!res.ok) return { github, model: { kind: 'ollama', baseUrl, name, reachable: false } };
@@ -95,4 +82,31 @@ export async function readStatus(env: NodeJS.ProcessEnv, fetchFn: typeof fetch =
   } catch {
     return { github, model: { kind: 'ollama', baseUrl, name, reachable: false } };
   }
+}
+
+/**
+ * Reports what the review will talk to: GitHub config, and the AI. With `providerId` (the one chosen in the
+ * UI) that provider is described: Ollama is probed (is it up, is the chosen model pulled), Claude is not
+ * (a probe would cost money) - only whether a key is configured. Without it (older callers), an
+ * ANTHROPIC_BASE_URL in the environment means Ollama, otherwise the hosted Anthropic API.
+ */
+export async function readStatus(env: NodeJS.ProcessEnv, fetchFn: typeof fetch = fetch, providerId?: ProviderId): Promise<AppStatus> {
+  const github: AppStatus['github'] = {
+    configured: Boolean(env.GITHUB_TOKEN),
+    owner: env.GITHUB_OWNER || undefined,
+    repo: env.GITHUB_REPO || undefined,
+  };
+
+  if (providerId) {
+    const info = listProviders(env).find((p) => p.id === providerId);
+    if (providerId === 'claude') {
+      return { github, model: { kind: 'anthropic', name: info?.model, reachable: info?.available ? undefined : false } };
+    }
+    return probeOllama(ollamaBaseUrl(env), info?.model, fetchFn, github);
+  }
+
+  const baseUrl = env.ANTHROPIC_BASE_URL || undefined;
+  const name = env.ANTHROPIC_MODEL || undefined;
+  if (!baseUrl) return { github, model: { kind: 'anthropic', name } };
+  return probeOllama(baseUrl, name, fetchFn, github);
 }
