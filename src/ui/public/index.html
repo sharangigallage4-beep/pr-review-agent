@@ -156,6 +156,17 @@
   .stat .big { font-size: 26px; font-weight: 700; line-height: 1.15; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
   .stat .label { font-size: 12.5px; color: var(--muted); }
   .stat.wide { grid-column: 1 / -1; }
+  .usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .usage-grid .big { font-size: 24px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+  .usage-grid .label { font-size: 12.5px; color: var(--muted); }
+  .meter { height: 10px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); overflow: hidden; margin: 14px 0 4px; }
+  .meter > span { display: block; height: 100%; background: var(--ok); }
+  .meter.warn > span { background: var(--warn); }
+  .meter.bad > span { background: var(--bad); }
+  .usage-table { width: 100%; border-collapse: collapse; margin-top: 14px; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  .usage-table th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  .usage-table td { padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  .usage-table th.num, .usage-table td.num { text-align: right; }
   .stat .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
   .toolbar { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
   .toolbar input[type=text] { flex: 1 1 220px; }
@@ -220,6 +231,9 @@
 
   <div class="section-head"><h2>Recent reviews</h2><span class="accuracy" id="accuracy"></span></div>
   <div class="list" id="jobs"></div>
+
+  <div class="section-head"><h2>Claude usage</h2><span class="accuracy" id="usagemonth"></span></div>
+  <section class="card pad" id="usage" aria-label="Claude usage"></section>
 
   <div class="section-head"><h2>Review rules</h2><button class="ghost" id="newdoc">New document</button></div>
   <div class="list" id="rules"></div>
@@ -352,8 +366,46 @@
     if (u.limits.tokens) lines.push('Token limit per month: ' + u.limits.tokens.toLocaleString());
     if (u.limits.usd) lines.push('Budget per month: ' + fmtUsd(u.limits.usd));
     if (u.exceeded) lines.push('The limit is reached: new Claude reviews are refused until next month.');
-    return el('span', { class: 'chip', title: lines.join('\n') },
+    return el('button', { class: 'chip', style: 'cursor:pointer', title: lines.join('\n') + '\nClick to see the details.', on: { click: function () { $('usage').scrollIntoView({ behavior: 'smooth', block: 'center' }); } } },
       el('span', { class: 'dot ' + (u.exceeded ? 'bad' : (u.percentUsed >= 80 ? 'warn' : 'ok')) }), text);
+  }
+
+  function renderUsagePanel() {
+    var box = $('usage');
+    var u = state.usage;
+    box.textContent = '';
+    $('usagemonth').textContent = u && u.available ? u.month : '';
+    if (!u || !u.available) { box.appendChild(el('p', { class: 'hint', text: 'Usage is not tracked on this server.' })); return; }
+    if (!u.reviews) box.appendChild(el('p', { class: 'hint', text: 'No Claude reviews yet this month. Reviews done with Ollama are free and are not counted here.' }));
+    function cell(big, label) { return el('div', null, el('div', { class: 'big', text: big }), el('div', { class: 'label', text: label })); }
+    box.appendChild(el('div', { class: 'usage-grid' },
+      cell(String(u.reviews), 'Claude reviews this month'),
+      cell(fmtTokens(u.inputTokens), 'tokens sent (input)'),
+      cell(fmtTokens(u.outputTokens), 'tokens written (output)'),
+      cell(u.costUsd !== undefined ? '≈ ' + fmtUsd(u.costUsd) : '—', u.priced ? 'estimated cost' : 'cost: set the prices in .env')));
+    if (u.percentUsed !== undefined) {
+      var limit = [];
+      if (u.limits.tokens) limit.push(u.limits.tokens.toLocaleString() + ' tokens');
+      if (u.limits.usd) limit.push(fmtUsd(u.limits.usd));
+      box.appendChild(el('div', { class: 'meter ' + (u.exceeded ? 'bad' : (u.percentUsed >= 80 ? 'warn' : '')) },
+        el('span', { style: 'width:' + Math.min(100, u.percentUsed) + '%' })));
+      box.appendChild(el('p', { class: 'hint', text: u.percentUsed + '% of this month\'s limit (' + limit.join(' / ') + ')' + (u.exceeded ? ' — reached: new Claude reviews are refused until next month.' : '') }));
+    } else {
+      box.appendChild(el('p', { class: 'hint', text: 'No monthly limit is set. To cap the spending add CLAUDE_MONTHLY_TOKEN_LIMIT to the .env file.' }));
+    }
+    if (u.recent && u.recent.length) {
+      var table = el('table', { class: 'usage-table' },
+        el('thead', null, el('tr', null, el('th', { text: 'Review' }), el('th', { text: 'When' }),
+          el('th', { class: 'num', text: 'Tokens in' }), el('th', { class: 'num', text: 'Tokens out' }), u.priced ? el('th', { class: 'num', text: 'Cost' }) : null)));
+      var body = el('tbody');
+      u.recent.forEach(function (r) {
+        body.appendChild(el('tr', null, el('td', { text: r.label }), el('td', { text: new Date(r.createdAt).toLocaleString() }),
+          el('td', { class: 'num', text: r.inputTokens.toLocaleString() }), el('td', { class: 'num', text: r.outputTokens.toLocaleString() }),
+          u.priced ? el('td', { class: 'num', text: r.costUsd !== undefined ? '≈ ' + fmtUsd(r.costUsd) : '' }) : null));
+      });
+      table.appendChild(body);
+      box.appendChild(table);
+    }
   }
 
   // The AI chooser: Ollama (this computer) or Claude (API). Unavailable ones are greyed out with the reason.
@@ -380,6 +432,7 @@
       return api('/api/usage').catch(function () { return null; });
     }).then(function (u) {
       state.usage = u;
+      renderUsagePanel();
       return api('/api/status');
     }).then(renderStatus).catch(function () {
       renderStatus({ model: { kind: 'ollama', reachable: false }, github: { configured: false } });
