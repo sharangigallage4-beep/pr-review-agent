@@ -352,8 +352,7 @@
     if (u.limits.tokens) lines.push('Token limit per month: ' + u.limits.tokens.toLocaleString());
     if (u.limits.usd) lines.push('Budget per month: ' + fmtUsd(u.limits.usd));
     if (u.exceeded) lines.push('The limit is reached: new Claude reviews are refused until next month.');
-    return el('span', { class: 'chip', title: lines.join('
-') },
+    return el('span', { class: 'chip', title: lines.join('\n') },
       el('span', { class: 'dot ' + (u.exceeded ? 'bad' : (u.percentUsed >= 80 ? 'warn' : 'ok')) }), text);
   }
 
