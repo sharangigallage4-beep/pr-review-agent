@@ -569,3 +569,30 @@ describe('review UI app: health check', () => {
     }
   });
 });
+
+describe('review UI app: usage route', () => {
+  test('returns the usage summary, or says it is not available', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ui-usage-'));
+    writeFileSync(path.join(dir, 'index.html'), 'x');
+    const make = (usage?: () => never) =>
+      buildUiApp({
+        jobs: new JobManager({ echo: silent }),
+        publicDir: dir,
+        listPullRequests: async () => [],
+        getStatus: async () => ({ github: { configured: true }, model: { kind: 'anthropic' } }),
+        usage,
+      }).listen(0, '127.0.0.1');
+    const withUsage = make((() => ({ available: true, month: '2026-10', totalTokens: 5 })) as never);
+    const without = make();
+    await Promise.all([withUsage, without].map((s) => new Promise((r) => s.once('listening', r))));
+    try {
+      const get = async (s: Server) => (await fetch(`http://127.0.0.1:${(s.address() as AddressInfo).port}/api/usage`)).json();
+      assert.deepEqual(await get(withUsage), { available: true, month: '2026-10', totalTokens: 5 });
+      assert.deepEqual(await get(without), { available: false });
+    } finally {
+      withUsage.close();
+      without.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -5,6 +5,7 @@ import type { ReviewPreview, ReviewPullRequestOutcome } from '../workflow/review
 import { consoleLogger, toSafeLogFields } from '../workflow/logger.js';
 import type { ReviewIssue } from '../review/types.js';
 import type { ProviderId } from '../review/providers.js';
+import { addUsage, type Usage } from './usage.js';
 import type { ReviewPullRequestDeps } from '../workflow/reviewPullRequestWorkflow.js';
 
 export type JobStatus =
@@ -36,6 +37,8 @@ export interface Job {
   autoPost: boolean;
   /** Which AI the review asked (fixed when the review was started, so a later switch does not change it). */
   provider?: ProviderId;
+  /** Tokens the model used for this review (only counted for models that report them, i.e. Claude). */
+  usage?: Usage;
   status: JobStatus;
   createdAt: string;
   log: JobLogLine[];
@@ -78,7 +81,7 @@ export interface JobManagerOptions {
    * Builds the review function for a provider; it may throw a message for the user (for example when
    * the Claude key is missing), which then fails that review with that message.
    */
-  reviewerFor?: (provider: ProviderId) => ReviewPullRequestDeps['runClaudeReview'];
+  reviewerFor?: (provider: ProviderId, onUsage: (usage: { inputTokens: number; outputTokens: number }) => void) => ReviewPullRequestDeps['runClaudeReview'];
 }
 
 const MAX_LOG_LINES = 200;
@@ -279,7 +282,7 @@ export class JobManager {
 
     try {
       // The provider is looked up here, inside the try block, so a missing key fails this review with a clear message.
-      const runClaudeReview = job.provider && this.reviewerFor ? this.reviewerFor(job.provider) : undefined;
+      const runClaudeReview = job.provider && this.reviewerFor ? this.reviewerFor(job.provider, (used) => { job.usage = addUsage(job.usage, used); }) : undefined;
       const outcome = await this.runReview(job.owner, job.repo, job.pr, {
         logger,
         ...(runClaudeReview ? { runClaudeReview } : {}),

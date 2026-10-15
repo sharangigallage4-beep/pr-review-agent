@@ -173,3 +173,27 @@ describe('requestReview with an explicit provider', () => {
     assert.equal(model, 'claude-sonnet-5-5');
   });
 });
+
+describe('requestReview usage reporting', () => {
+  const ok = { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'submit_review', input: { summary: 'ok', issues: [] } }] };
+
+  test('reports the tokens a response used, cache tokens included', async () => {
+    const seen: unknown[] = [];
+    const client = fakeClient(async () => ({ ...ok, usage: { input_tokens: 100, cache_creation_input_tokens: 20, cache_read_input_tokens: 5, output_tokens: 40 } }));
+    await requestReview({ ...baseParams, onUsage: (u) => seen.push(u) }, client);
+    assert.deepEqual(seen, [{ inputTokens: 125, outputTokens: 40, model: 'claude-sonnet-5' }]);
+  });
+
+  test('a response cut off by max_tokens is still counted, since it was paid for', async () => {
+    const seen: unknown[] = [];
+    const client = fakeClient(async () => ({ stop_reason: 'max_tokens', content: [], usage: { input_tokens: 10, output_tokens: 16000 } }));
+    await assert.rejects(() => requestReview({ ...baseParams, onUsage: (u) => seen.push(u) }, client), /max_tokens/);
+    assert.equal(seen.length, 1);
+  });
+
+  test('a response without usage numbers (a local model) simply reports nothing', async () => {
+    const seen: unknown[] = [];
+    await requestReview({ ...baseParams, onUsage: (u) => seen.push(u) }, fakeClient(async () => ok));
+    assert.deepEqual(seen, []);
+  });
+});

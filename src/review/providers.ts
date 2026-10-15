@@ -1,4 +1,4 @@
-import { requestReview } from './claudeClient.js';
+import { requestReview, type RequestReviewParams } from './claudeClient.js';
 import { reviewPullRequest as reviewWithService } from './reviewService.js';
 
 /**
@@ -122,6 +122,11 @@ export function ollamaBaseUrl(env: NodeJS.ProcessEnv): string {
  * A review function that asks the given provider - what the workflow calls in place of its default.
  * `send` is how the request is made; tests replace it so nothing goes over the network.
  */
-export function reviewerFor(provider: ResolvedProvider, send: typeof requestReview = requestReview): typeof reviewWithService {
-  return (input, deps = {}) => reviewWithService(input, { ...deps, requestReview: (params) => send({ ...params, provider }) });
+export function reviewerFor(
+  provider: ResolvedProvider,
+  send: typeof requestReview = requestReview,
+  onUsage?: RequestReviewParams['onUsage']
+): typeof reviewWithService {
+  return (input, deps = {}) =>
+    reviewWithService(input, { ...deps, requestReview: (params) => send({ ...params, provider, ...(onUsage ? { onUsage } : {}) }) });
 }

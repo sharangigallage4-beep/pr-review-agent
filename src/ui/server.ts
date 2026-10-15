@@ -8,6 +8,7 @@ import { createAuth } from './auth.js';
 import { AutoReviewer } from './autoReview.js';
 import { JobManager } from './jobs.js';
 import { ProviderSettings } from './providerSettings.js';
+import { budgetProblem, summarizeUsage } from './usage.js';
 import { resolveProvider, reviewerFor } from '../review/providers.js';
 import { isLoopbackHost, platformHosts, resolveCookieSecure, resolveHost, resolvePort, resolveTrustProxy } from './hostConfig.js';
 import { listenErrorMessage } from './listenError.js';
@@ -68,7 +69,12 @@ function main(): void {
     historyFile: path.join(dataDir, '.review-history.json'),
     // Each review asks whichever AI is selected when it starts (the dropdown in the page).
     defaultProvider: () => providers.get(),
-    reviewerFor: (id) => reviewerFor(resolveProvider(id, process.env)),
+    reviewerFor: (id, onUsage) => {
+      // A shared Claude key must not run up an unlimited bill: past this month's cap new Claude reviews are refused.
+      const problem = id === 'claude' ? budgetProblem(jobs.list(), process.env) : undefined;
+      if (problem) throw new Error(problem);
+      return reviewerFor(resolveProvider(id, process.env), undefined, onUsage);
+    },
   });
   const listPullRequests = (owner: string, repo: string) => listOpenPullRequests(owner, repo, token);
 
@@ -77,6 +83,7 @@ function main(): void {
     listPullRequests,
     getStatus: () => readStatus(process.env, fetch, providers.get()),
     providers,
+    usage: () => summarizeUsage(jobs.list(), process.env),
     publicDir: path.join(here, 'public'),
     allowedHosts,
     allowedOrigins,

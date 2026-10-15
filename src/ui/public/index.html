@@ -331,11 +331,32 @@
     } else { label = 'AI model: Anthropic API' + (m.name ? ' · ' + m.name : ''); cls = 'ok'; }
     chips.appendChild(el('span', { class: 'chip', title: m.baseUrl || '' }, el('span', { class: 'dot ' + cls }), label));
     if (state.providers && state.providers.available) chips.insertBefore(providerPicker(), chips.firstChild);
+    var usageChip = usageChipNode();
+    if (usageChip) chips.appendChild(usageChip);
     chips.appendChild(el('span', { class: 'chip' }, el('span', { class: 'dot ' + (s.github.configured ? 'ok' : 'bad') }),
       s.github.configured ? 'GitHub connected' : 'GitHub token missing'));
     chips.appendChild(el('button', { class: 'chip', style: 'cursor:pointer', title: 'Switch between automatic, light and dark', text: 'Theme: ' + theme, on: { click: cycleTheme } }));
     if (state.authRequired) chips.appendChild(el('button', { class: 'chip', style: 'cursor:pointer', text: 'Sign out', on: { click: signOut } }));
   }
+  // ---- Claude usage: tokens (and an estimated price when prices are set in .env) this month
+  function fmtTokens(n) { return n >= 1e6 ? (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n); }
+  function fmtUsd(n) { return '$' + (n < 0.1 ? n.toFixed(3) : n.toFixed(2)); }
+  function usageChipNode() {
+    var u = state.usage;
+    if (!u || !u.available || (!u.reviews && u.percentUsed === undefined)) return null;
+    var text = 'Claude ' + u.month + ': ' + fmtTokens(u.totalTokens) + ' tokens' + (u.costUsd !== undefined ? ' ≈ ' + fmtUsd(u.costUsd) : '');
+    if (u.percentUsed !== undefined) text += ' · ' + u.percentUsed + '% of limit';
+    var lines = [u.reviews + ' review(s) this month: ' + u.inputTokens.toLocaleString() + ' tokens in, ' + u.outputTokens.toLocaleString() + ' tokens out.'];
+    if (!u.priced) lines.push('No prices set, so no cost is shown (CLAUDE_PRICE_INPUT_PER_MTOK / CLAUDE_PRICE_OUTPUT_PER_MTOK in .env).');
+    else lines.push('The cost is an estimate from the prices set in .env.');
+    if (u.limits.tokens) lines.push('Token limit per month: ' + u.limits.tokens.toLocaleString());
+    if (u.limits.usd) lines.push('Budget per month: ' + fmtUsd(u.limits.usd));
+    if (u.exceeded) lines.push('The limit is reached: new Claude reviews are refused until next month.');
+    return el('span', { class: 'chip', title: lines.join('
+') },
+      el('span', { class: 'dot ' + (u.exceeded ? 'bad' : (u.percentUsed >= 80 ? 'warn' : 'ok')) }), text);
+  }
+
   // The AI chooser: Ollama (this computer) or Claude (API). Unavailable ones are greyed out with the reason.
   function providerPicker() {
     var sel = el('select', { class: 'chip', style: 'cursor:pointer', title: 'Which AI writes the reviews', 'aria-label': 'AI provider' });
@@ -357,6 +378,9 @@
   function refreshStatus() {
     return api('/api/provider').catch(function () { return null; }).then(function (p) {
       state.providers = p;
+      return api('/api/usage').catch(function () { return null; });
+    }).then(function (u) {
+      state.usage = u;
       return api('/api/status');
     }).then(renderStatus).catch(function () {
       renderStatus({ model: { kind: 'ollama', reachable: false }, github: { configured: false } });
@@ -574,6 +598,10 @@
     panel.appendChild(el('div', { class: 'panel-head' },
       el('span', { class: 'panel-title', text: (job.kind === 'local' ? 'Local review · ' + job.label : job.owner + '/' + job.repo + ' · PR #' + job.pr) + (job.provider ? ' · ' + (job.provider === 'claude' ? 'Claude' : 'Ollama') : '') }),
       el('span', { class: 'badge ' + job.status, text: STATUS_TEXT[job.status] })));
+    if (job.usage) {
+      var entry = state.usage && state.usage.recent ? state.usage.recent.filter(function (r) { return r.id === job.id; })[0] : null;
+      panel.appendChild(el('p', { class: 'hint', text: 'Used ' + job.usage.inputTokens.toLocaleString() + ' tokens in and ' + job.usage.outputTokens.toLocaleString() + ' out' + (entry && entry.costUsd !== undefined ? ' (≈ ' + fmtUsd(entry.costUsd) + ')' : '') + '.' }));
+    }
 
     if (job.status === 'queued' || job.status === 'running') {
       var s = stepsFor(job);
@@ -647,6 +675,9 @@
   function pollJobs() {
     return api('/api/jobs').then(function (data) {
       state.jobs = data.jobs; renderJobs(); renderPrs(); renderStats(); renderPanel(); loadAccuracy();
+      // When a review has used more tokens, the header's usage chip is out of date.
+      var usageSig = state.jobs.reduce(function (n, j) { return n + (j.usage ? j.usage.inputTokens + j.usage.outputTokens : 0); }, 0);
+      if (usageSig !== state.usageSig) { state.usageSig = usageSig; refreshStatus(); }
       var anyActive = state.jobs.some(function (j) { return ACTIVE[j.status]; });
       clearTimeout(timer);
       if (anyActive) timer = setTimeout(pollJobs, 2000);

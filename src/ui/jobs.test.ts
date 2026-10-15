@@ -323,3 +323,21 @@ describe('JobManager AI provider', () => {
     assert.equal(job.provider, undefined);
   });
 });
+
+describe('JobManager usage', () => {
+  test('adds up the tokens the reviewer reports, and keeps them on the job', async () => {
+    const jobs = new JobManager({
+      echo: silent,
+      defaultProvider: () => 'claude',
+      reviewerFor: (_id, onUsage) => {
+        onUsage({ inputTokens: 1000, outputTokens: 200 });
+        onUsage({ inputTokens: 500, outputTokens: 50 });
+        return (async () => ({ summary: 's', issues: [] })) as never;
+      },
+      runReview: (async () => ({ status: 'skipped', reason: 'no_reviewable_files' })) as never,
+    });
+    const job = jobs.start('acme', 'w', 9);
+    await waitFor(job, (j) => j.status === 'skipped');
+    assert.deepEqual(job.usage, { inputTokens: 1500, outputTokens: 250, requests: 2 });
+  });
+});

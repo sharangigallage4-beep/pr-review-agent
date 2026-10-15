@@ -9,6 +9,7 @@ import { LocalInputError, listLocalInputs, loadLocalInput } from './localInput.j
 import { runVersionReview } from './versionReview.js';
 import { ProviderError } from '../review/providers.js';
 import type { ProviderSettings } from './providerSettings.js';
+import type { UsageSummary } from './usage.js';
 import { ConventionError, deleteConventionDoc, listConventionDocs, saveConventionDoc } from './conventionsStore.js';
 
 export interface PullRequestSummary {
@@ -53,6 +54,8 @@ export interface BuildUiAppOptions {
   auth?: Auth;
   /** Which AI (Ollama or Claude) new reviews use, with the UI's switch. */
   providers?: ProviderSettings;
+  /** What Claude has been used for this month (tokens, estimated cost, cap), for the usage chip. */
+  usage?: () => UsageSummary;
   /** Enables the "auto-review new PRs" switch. */
   auto?: AutoReviewer;
   /** The folder whose sub-folders and .zip files can be reviewed from the page (never any other path). */
@@ -337,6 +340,10 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
       : { available: false, selected: null, providers: [] };
 
   // Only names, models and whether each can be used - never a key.
+  app.get('/api/usage', (_req, res) => {
+    res.json(options.usage ? options.usage() : { available: false });
+  });
+
   app.get('/api/provider', (_req, res) => {
     res.json(providerState());
   });

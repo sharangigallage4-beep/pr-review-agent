@@ -96,6 +96,8 @@ export interface RequestReviewParams {
   /** Which server and model to ask (Claude or Ollama). When given it replaces `model` and the environment. */
   provider?: ResolvedProvider;
   maxTokens?: number;
+  /** Told how many tokens each response used, so the UI can show what a review cost. */
+  onUsage?: (usage: { inputTokens: number; outputTokens: number; model: string }) => void;
 }
 
 /**
@@ -105,7 +107,7 @@ export interface RequestReviewParams {
  * entirely when a client is supplied.
  */
 export async function requestReview(
-  { systemPrompt, userMessage, model, maxTokens, provider }: RequestReviewParams,
+  { systemPrompt, userMessage, model, maxTokens, provider, onUsage }: RequestReviewParams,
   injectedClient?: Anthropic
 ): Promise<unknown> {
   const client = injectedClient ?? (provider ? clientFor(provider) : getAnthropicClient());
@@ -141,6 +143,16 @@ export async function requestReview(
       modelsWithoutForcedToolChoice.add(resolvedModel);
       response = await createMessage({ type: 'auto' });
     }
+  }
+
+  // Counted before any check below: a response that is cut off or unusable still used (and cost) tokens.
+  const used = response.usage;
+  if (used && onUsage) {
+    onUsage({
+      inputTokens: (used.input_tokens ?? 0) + (used.cache_creation_input_tokens ?? 0) + (used.cache_read_input_tokens ?? 0),
+      outputTokens: used.output_tokens ?? 0,
+      model: resolvedModel,
+    });
   }
 
   // Fail fast with a clear, specific diagnosis rather than letting a truncated tool call fall

@@ -105,4 +105,20 @@ describe('reviewerFor', () => {
     await claude(input, { conventions: '' });
     assert.deepEqual(seen, ['ollama', 'claude']);
   });
+
+  test('passes the usage callback on to the model call', async () => {
+    const provider = { id: 'claude' as const, apiKey: 'k', baseURL: 'https://api.anthropic.com', model: 'm' };
+    const onUsage = () => {};
+    let received: unknown;
+    const review = reviewerFor(
+      provider,
+      async (params) => {
+        received = params.onUsage;
+        return { summary: 'ok', issues: [] };
+      },
+      onUsage
+    );
+    await review(input, { conventions: '' });
+    assert.equal(received, onUsage);
+  });
 });
