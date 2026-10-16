@@ -266,7 +266,15 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
       res.status(400).json({ error: 'owner, repo and a positive integer pr are required.' });
       return;
     }
-    const job = jobs.start(ref.owner, ref.repo, pr, body.autoPost === true);
+    const headSha = typeof body.headSha === 'string' && /^[0-9a-f]{7,64}$/i.test(body.headSha) ? body.headSha : undefined;
+    const force = body.force === true;
+    // The same commit is never reviewed twice by accident: its earlier result is returned, no tokens are used.
+    const reused = headSha && !force ? jobs.reusableFor(ref.owner, ref.repo, pr, headSha) : undefined;
+    if (reused && !jobs.activeFor(ref.owner, ref.repo, pr)) {
+      res.status(200).json({ ...reused, reused: true });
+      return;
+    }
+    const job = jobs.start(ref.owner, ref.repo, pr, body.autoPost === true, undefined, { headSha, force });
     res.status(202).json(job);
   });
 

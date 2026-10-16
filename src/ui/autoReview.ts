@@ -124,7 +124,7 @@ export class AutoReviewer {
 
         this.attempts.set(key, (this.attempts.get(key) ?? 0) + 1);
         this.seen.add(key);
-        this.options.jobs.start(owner, repo, pr.number, autoPost);
+        this.options.jobs.start(owner, repo, pr.number, autoPost, undefined, { headSha: pr.headSha });
       }
       this.save();
     } catch (err) {

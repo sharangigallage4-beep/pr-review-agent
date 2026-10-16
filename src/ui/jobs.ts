@@ -35,6 +35,8 @@ export interface Job {
   pr: number;
   /** When true the review is posted as soon as it is ready, without waiting for the user. */
   autoPost: boolean;
+  /** The commit the pull request pointed at when this review started - the same commit is never reviewed twice unless asked. */
+  headSha?: string;
   /** Which AI the review asked (fixed when the review was started, so a later switch does not change it). */
   provider?: ProviderId;
   /** Tokens the model used for this review (only counted for models that report them, i.e. Claude). */
@@ -146,9 +148,28 @@ export class JobManager {
     );
   }
 
-  start(owner: string, repo: string, pr: number, autoPost = false, provider?: ProviderId): Job {
+  /**
+   * A finished review of exactly this commit, if there is one. Reviewing the same commit again would cost
+   * tokens for the same answer, so start() hands this back instead - unless a new review is asked for.
+   */
+  reusableFor(owner: string, repo: string, pr: number, headSha: string): Job | undefined {
+    return this.list().find(
+      (j) =>
+        j.owner === owner &&
+        j.repo === repo &&
+        j.pr === pr &&
+        j.headSha === headSha &&
+        (j.status === 'posted' || j.status === 'done' || (j.status === 'cancelled' && j.preview !== undefined))
+    );
+  }
+
+  start(owner: string, repo: string, pr: number, autoPost = false, provider?: ProviderId, options: { headSha?: string; force?: boolean } = {}): Job {
     const existing = this.activeFor(owner, repo, pr);
     if (existing) return existing;
+    if (options.headSha && !options.force) {
+      const already = this.reusableFor(owner, repo, pr, options.headSha);
+      if (already) return already;
+    }
 
     const job: Job = {
       id: randomUUID(),
@@ -157,6 +178,7 @@ export class JobManager {
       pr,
       autoPost,
       provider: provider ?? this.defaultProvider?.(),
+      ...(options.headSha ? { headSha: options.headSha } : {}),
       status: 'queued',
       createdAt: new Date().toISOString(),
       log: [],

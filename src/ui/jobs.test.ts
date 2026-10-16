@@ -383,3 +383,58 @@ describe('JobManager local reviews and the selected AI', () => {
     assert.match(job.error ?? '', /no Claude API key/);
   });
 });
+
+describe('JobManager: the same commit is not reviewed twice', () => {
+  const SHA = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
+  const make = () => {
+    let runs = 0;
+    const jobs = new JobManager({
+      echo: silent,
+      runReview: (async (_o: string, _r: string, _n: number, overrides: { confirmBeforePosting?: (p: unknown) => unknown }) => {
+        runs += 1;
+        await overrides.confirmBeforePosting?.({ owner: 'acme', repo: 'w', pullRequestNumber: 1, summary: 's', inlineFindings: [], summaryOnlyFindings: [] });
+        return { status: 'posted', reviewId: 1, reviewUrl: 'u', newCommentCount: 0, summaryOnlyCount: 0, totalFindings: 0 };
+      }) as never,
+    });
+    return { jobs, runs: () => runs };
+  };
+
+  test('asking again for a reviewed commit returns the earlier review and does not call the AI', async () => {
+    const { jobs, runs } = make();
+    const first = jobs.start('acme', 'w', 1, true, undefined, { headSha: SHA });
+    await waitFor(first, (j) => j.status === 'posted');
+    const again = jobs.start('acme', 'w', 1, true, undefined, { headSha: SHA });
+    assert.equal(again.id, first.id);
+    assert.equal(runs(), 1);
+    assert.equal(jobs.list().length, 1);
+  });
+
+  test('a new commit, a forced review, or a call without a commit all review again', async () => {
+    const { jobs, runs } = make();
+    const first = jobs.start('acme', 'w', 1, true, undefined, { headSha: SHA });
+    await waitFor(first, (j) => j.status === 'posted');
+    const newer = jobs.start('acme', 'w', 1, true, undefined, { headSha: 'f'.repeat(40) });
+    await waitFor(newer, (j) => j.status === 'posted');
+    const forced = jobs.start('acme', 'w', 1, true, undefined, { headSha: SHA, force: true });
+    await waitFor(forced, (j) => j.status === 'posted');
+    const unknown = jobs.start('acme', 'w', 1, true);
+    await waitFor(unknown, (j) => j.status === 'posted');
+    assert.equal(new Set([first.id, newer.id, forced.id, unknown.id]).size, 4);
+    assert.equal(runs(), 4);
+  });
+
+  test('a failed review of a commit does not block trying it again', async () => {
+    let calls = 0;
+    const jobs = new JobManager({
+      echo: silent,
+      runReview: (async () => {
+        calls += 1;
+        return calls === 1 ? { status: 'failed', stage: 'claude', reason: 'model down' } : { status: 'skipped', reason: 'no_reviewable_files' };
+      }) as never,
+    });
+    const first = jobs.start('acme', 'w', 2, false, undefined, { headSha: SHA });
+    await waitFor(first, (j) => j.status === 'failed');
+    const second = jobs.start('acme', 'w', 2, false, undefined, { headSha: SHA });
+    assert.notEqual(second.id, first.id);
+  });
+});

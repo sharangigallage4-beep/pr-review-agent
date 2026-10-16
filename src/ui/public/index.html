@@ -486,7 +486,7 @@
     if (!todo.length || !window.confirm('Start ' + todo.length + ' reviews? They run one after another, and each can take a few minutes on a local model.')) return;
     var post = $('autopost').checked;
     todo.reduce(function (chain, pr) {
-      return chain.then(function () { return api('/api/jobs', { method: 'POST', body: { owner: state.loaded.owner, repo: state.loaded.repo, pr: pr.number, autoPost: post } }); });
+      return chain.then(function () { return api('/api/jobs', { method: 'POST', body: { owner: state.loaded.owner, repo: state.loaded.repo, pr: pr.number, headSha: pr.headSha, autoPost: post } }); });
     }, Promise.resolve()).then(function () { toast(todo.length + ' reviews queued.'); return pollJobs(); }).catch(function (err) { toast(err.message); pollJobs(); });
   }
 
@@ -557,8 +557,17 @@
         actions.appendChild(el('span', { class: 'badge ' + job.status, text: STATUS_TEXT[job.status] }));
         actions.appendChild(el('button', { class: 'ghost', text: 'View', on: { click: function () { openJob(job.id); } } }));
       }
-      actions.appendChild(el('button', { class: 'primary', text: busy ? 'In progress…' : (job ? 'Review again' : 'Review'), disabled: busy ? 'disabled' : null,
-        on: { click: function () { startReview(pr); } } }));
+      // A commit that already has a finished review is not reviewed again by accident: that would use the AI (tokens) for the same answer.
+      var doneSame = job && job.headSha && job.headSha === pr.headSha && (job.status === 'posted' || job.status === 'done' || (job.status === 'cancelled' && job.preview));
+      var newer = job && job.headSha && job.headSha !== pr.headSha;
+      var label = busy ? 'In progress…' : (doneSame ? 'Review again' : (newer ? 'Review new commits' : (job ? 'Review again' : 'Review')));
+      var again = job && !busy && job.status !== 'failed' && job.status !== 'skipped';
+      actions.appendChild(el('button', { class: doneSame ? 'ghost' : 'primary', text: label, disabled: busy ? 'disabled' : null,
+        title: doneSame ? 'This commit was already reviewed. A new review uses the AI again.' : null,
+        on: { click: function () {
+          if (doneSame && !window.confirm('This commit was already reviewed. Reviewing it again uses the AI (and tokens) again for the same code. Continue?')) return;
+          startReview(pr, Boolean(again));
+        } } }));
       box.appendChild(el('div', { class: 'card pr' + (job ? ' s-' + job.status : '') },
         avatar(pr.author),
         el('div', { class: 'pr-main' },
@@ -669,9 +678,13 @@
   }
 
   // ---- reviews
-  function startReview(pr) {
-    api('/api/jobs', { method: 'POST', body: { owner: state.loaded.owner, repo: state.loaded.repo, pr: pr.number, autoPost: $('autopost').checked } })
-      .then(function (job) { state.openJobId = job.id; return pollJobs().then(function () { $('panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); }); })
+  // force = the person asked for a new review of a commit that was already reviewed (it uses the AI again).
+  function startReview(pr, force) {
+    api('/api/jobs', { method: 'POST', body: { owner: state.loaded.owner, repo: state.loaded.repo, pr: pr.number, headSha: pr.headSha, force: force === true, autoPost: $('autopost').checked } })
+      .then(function (job) {
+        if (job.reused) toast('This commit was already reviewed - showing that result. No tokens were used.');
+        state.openJobId = job.id; return pollJobs().then(function () { $('panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+      })
       .catch(function (err) { toast(err.message); });
   }
   function openJob(id) { state.openJobId = id; renderPanel(); $('panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); }

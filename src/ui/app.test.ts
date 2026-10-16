@@ -706,3 +706,49 @@ describe('review UI app: uploaded files', () => {
     }
   });
 });
+
+describe('review UI app: an already reviewed commit', () => {
+  test('is answered from the earlier review (200, reused) unless a new review is forced (202)', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ui-reuse-'));
+    writeFileSync(path.join(dir, 'index.html'), 'x');
+    let runs = 0;
+    const jobs = new JobManager({
+      echo: silent,
+      runReview: (async (_o: string, _r: string, _n: number, overrides: { confirmBeforePosting?: (p: unknown) => unknown }) => {
+        runs += 1;
+        await overrides.confirmBeforePosting?.({ owner: 'o', repo: 'r', pullRequestNumber: 1, summary: 's', inlineFindings: [], summaryOnlyFindings: [] });
+        return { status: 'posted', reviewId: 1, reviewUrl: 'u', newCommentCount: 0, summaryOnlyCount: 0, totalFindings: 0 };
+      }) as never,
+    });
+    const server = buildUiApp({
+      jobs,
+      publicDir: dir,
+      listPullRequests: async () => [],
+      getStatus: async () => ({ github: { configured: true }, model: { kind: 'anthropic' } }),
+    }).listen(0, '127.0.0.1');
+    await new Promise((r) => server.once('listening', r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const post = (body: unknown) => fetch(`${base}/api/jobs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const sha = 'abc1234def5678abc1234def5678abc1234def56';
+    try {
+      const first = await post({ owner: 'o', repo: 'r', pr: 1, headSha: sha, autoPost: true });
+      assert.equal(first.status, 202);
+      const job = (await first.json()) as { id: string };
+      for (let i = 0; i < 50 && jobs.get(job.id)?.status !== 'posted'; i += 1) await new Promise((r) => setTimeout(r, 40));
+
+      const again = await post({ owner: 'o', repo: 'r', pr: 1, headSha: sha, autoPost: true });
+      assert.equal(again.status, 200);
+      const reused = (await again.json()) as { id: string; reused: boolean };
+      assert.deepEqual([reused.id, reused.reused], [job.id, true]);
+      assert.equal(runs, 1, 'no second review was run');
+
+      const forced = await post({ owner: 'o', repo: 'r', pr: 1, headSha: sha, force: true, autoPost: true });
+      assert.equal(forced.status, 202);
+      const noSha = await post({ owner: 'o', repo: 'r', pr: 1, headSha: 'not a sha', autoPost: true });
+      assert.equal(noSha.status, 202, 'an invalid commit id is ignored, the review is simply started');
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
