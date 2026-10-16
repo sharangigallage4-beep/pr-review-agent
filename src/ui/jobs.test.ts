@@ -341,3 +341,45 @@ describe('JobManager usage', () => {
     assert.deepEqual(job.usage, { inputTokens: 1500, outputTokens: 250, requests: 2 });
   });
 });
+
+describe('JobManager local reviews and the selected AI', () => {
+  test('a local review takes the provider selected when it started, counts its tokens, and builds the reviewer only when asked', async () => {
+    const built: string[] = [];
+    const jobs = new JobManager({
+      echo: silent,
+      defaultProvider: () => 'claude',
+      reviewerFor: (id, onUsage) => {
+        built.push(id);
+        onUsage({ inputTokens: 700, outputTokens: 70 });
+        return (async () => ({ summary: 's', issues: [] })) as never;
+      },
+    });
+    const withAi = jobs.startLocal('with ai', async (_log, context) => {
+      assert.equal(typeof context.reviewer(), 'function');
+      return { summary: 's', findings: [] };
+    });
+    const withoutAi = jobs.startLocal('without ai', async () => ({ summary: 's', findings: [] }));
+    await waitFor(withAi, (j) => j.status === 'done');
+    await waitFor(withoutAi, (j) => j.status === 'done');
+    assert.deepEqual([withAi.provider, withoutAi.provider], ['claude', 'claude']);
+    assert.deepEqual(built, ['claude']);
+    assert.deepEqual(withAi.usage, { inputTokens: 700, outputTokens: 70, requests: 1 });
+    assert.equal(withoutAi.usage, undefined);
+  });
+
+  test('when the AI cannot be used, the local review fails with that message', async () => {
+    const jobs = new JobManager({
+      echo: silent,
+      defaultProvider: () => 'claude',
+      reviewerFor: () => {
+        throw new Error('There is no Claude API key.');
+      },
+    });
+    const job = jobs.startLocal('x', async (_log, context) => {
+      context.reviewer();
+      return { summary: 's', findings: [] };
+    });
+    await waitFor(job, (j) => j.status === 'failed');
+    assert.match(job.error ?? '', /no Claude API key/);
+  });
+});

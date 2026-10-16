@@ -52,6 +52,18 @@ export interface Job {
   feedback?: Record<string, FeedbackVote>;
 }
 
+/** What a local review's work function may use besides its log. */
+export interface LocalReviewContext {
+  /**
+   * The review function for the AI selected when this review started (counting its tokens), or undefined
+   * to use the environment's. Only call it when the AI is really needed: it throws a message for the user
+   * when that AI cannot be used (for example a missing Claude key or a reached monthly limit).
+   */
+  reviewer: () => NonNullable<ReviewPullRequestDeps['runClaudeReview']> | undefined;
+}
+
+export type LocalReviewWork = (log: (message: string) => void, context: LocalReviewContext) => Promise<LocalReviewResult>;
+
 export interface LocalReviewResult {
   summary: string;
   findings: ReviewIssue[];
@@ -160,7 +172,7 @@ export class JobManager {
    * progress through `log`; its findings are kept like a PR review's, but there is nothing to post -
    * the job simply ends as "done". It shares the queue with PR reviews: one model, one job at a time.
    */
-  startLocal(label: string, work: (log: (message: string) => void) => Promise<LocalReviewResult>): Job {
+  startLocal(label: string, work: LocalReviewWork): Job {
     const job: Job = {
       id: randomUUID(),
       kind: 'local',
@@ -169,6 +181,7 @@ export class JobManager {
       repo: label,
       pr: 0,
       autoPost: false,
+      ...(this.defaultProvider ? { provider: this.defaultProvider() } : {}),
       status: 'queued',
       createdAt: new Date().toISOString(),
       log: [],
@@ -247,13 +260,23 @@ export class JobManager {
     if (job.log.length > MAX_LOG_LINES) job.log.splice(0, job.log.length - MAX_LOG_LINES);
   }
 
-  private async runLocal(job: Job, work: (log: (message: string) => void) => Promise<LocalReviewResult>): Promise<void> {
+  private async runLocal(job: Job, work: LocalReviewWork): Promise<void> {
     job.status = 'running';
     try {
-      const result = await work((message) => {
-        this.addLog(job, 'info', message);
-        this.echo.info(message);
-      });
+      const result = await work(
+        (message) => {
+          this.addLog(job, 'info', message);
+          this.echo.info(message);
+        },
+        {
+          reviewer: () =>
+            job.provider && this.reviewerFor
+              ? this.reviewerFor(job.provider, (used) => {
+                  job.usage = addUsage(job.usage, used);
+                })
+              : undefined,
+        }
+      );
       job.preview = { owner: 'local', repo: job.label ?? '', pullRequestNumber: 0, summary: result.summary, inlineFindings: result.findings, summaryOnlyFindings: [] };
       job.status = 'done';
     } catch (err) {

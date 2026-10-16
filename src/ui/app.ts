@@ -6,6 +6,7 @@ import { SESSION_COOKIE, readCookie } from './auth.js';
 import type { Auth } from './auth.js';
 import type { AutoReviewer } from './autoReview.js';
 import { LocalInputError, listLocalInputs, loadLocalInput } from './localInput.js';
+import { UPLOAD_LIMITS, loadUpload } from './uploadInput.js';
 import { runVersionReview } from './versionReview.js';
 import { ProviderError } from '../review/providers.js';
 import type { ProviderSettings } from './providerSettings.js';
@@ -60,6 +61,8 @@ export interface BuildUiAppOptions {
   auto?: AutoReviewer;
   /** The folder whose sub-folders and .zip files can be reviewed from the page (never any other path). */
   localInputDir?: string;
+  /** Lets people choose files, a folder or a ZIP in the browser and have them reviewed. Default true. */
+  uploads?: boolean;
   /** Injectable for tests - defaults to the real version comparison and review. */
   versionReview?: typeof runVersionReview;
   /**
@@ -80,6 +83,9 @@ export interface BuildUiAppOptions {
 }
 
 const NAME_PATTERN = /^[A-Za-z0-9_.-]{1,100}$/;
+const UPLOAD_PATH = '/api/local-uploads';
+// Base64 makes the upload about a third bigger than the files themselves (both versions together must fit).
+const UPLOAD_BODY_LIMIT = `${Math.ceil((UPLOAD_LIMITS.maxTotalBytes * 4) / 3 / 1024 / 1024) + 2}mb`;
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 const OPEN_API_PATHS = new Set(['/api/login', '/api/logout', '/api/session']);
 
@@ -146,7 +152,9 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
     next();
   });
 
-  app.use(express.json({ limit: '100kb' }));
+  const smallJson = express.json({ limit: '100kb' });
+  // The upload route reads a much bigger body, but only after the login check (see below).
+  app.use((req: Request, res: Response, next: NextFunction) => (req.path === UPLOAD_PATH ? next() : smallJson(req, res, next)));
 
   const isSignedIn = (req: Request): boolean => !auth || auth.verifyToken(readCookie(req.header('cookie'), SESSION_COOKIE));
 
@@ -321,13 +329,45 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
         return;
       }
       const label = previous ? `${newName} (compared with ${previous})` : newName;
-      const job = jobs.startLocal(label, async (log) => {
+      const job = jobs.startLocal(label, async (log, context) => {
         log('Loading the files');
         const next = loadLocalInput(localInputDir, newName);
         const prev = previous ? loadLocalInput(localInputDir, previous) : undefined;
         return versionReview(
           { newFiles: next.files, oldFiles: prev?.files, label, useAi: useAi !== false, notes: [...next.notes, ...(prev?.notes ?? [])] },
-          { log }
+          { log, ...(useAi !== false ? { review: context.reviewer() } : {}) }
+        );
+      });
+      res.status(202).json(job);
+    })
+  );
+
+  const uploadsEnabled = options.uploads !== false;
+  const bigJson = express.json({ limit: UPLOAD_BODY_LIMIT });
+
+  app.get('/api/uploads', (_req, res) => {
+    res.json(uploadsEnabled ? { available: true, maxTotalBytes: UPLOAD_LIMITS.maxTotalBytes, maxFiles: UPLOAD_LIMITS.maxFiles } : { available: false });
+  });
+
+  app.post(
+    UPLOAD_PATH,
+    bigJson,
+    handle((req, res) => {
+      if (!uploadsEnabled) {
+        res.status(404).json({ error: 'Uploading files for review is not available on this server.' });
+        return;
+      }
+      const { newVersion, oldVersion, useAi, name } = (req.body ?? {}) as Record<string, unknown>;
+      const next = loadUpload(newVersion, 'new version');
+      const prev = oldVersion ? loadUpload(oldVersion, 'previous version') : undefined;
+      const shownName = (typeof name === 'string' ? name : '').replace(/\p{Cc}/gu, ' ').trim().slice(0, 80) || 'Uploaded files';
+      const label = prev ? `${shownName} (compared with the previous version)` : shownName;
+      const ai = useAi !== false;
+      const job = jobs.startLocal(label, async (log, context) => {
+        log(`Reviewing ${next.files.size} uploaded file(s)`);
+        return versionReview(
+          { newFiles: next.files, oldFiles: prev?.files, label, useAi: ai, notes: [...next.notes, ...(prev?.notes ?? [])] },
+          { log, ...(ai ? { review: context.reviewer() } : {}) }
         );
       });
       res.status(202).json(job);

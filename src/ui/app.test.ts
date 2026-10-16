@@ -596,3 +596,113 @@ describe('review UI app: usage route', () => {
     }
   });
 });
+
+describe('review UI app: uploaded files', () => {
+  const b64 = (text: string) => Buffer.from(text).toString('base64');
+  const upload = (...files: Array<[string, string]>) => ({ files: files.map(([path, text]) => ({ path, data: b64(text) })) });
+
+  async function start(options: { uploads?: boolean; password?: string; seen: Array<{ files: string[]; old?: string[]; useAi: boolean; reviewer: boolean }> }) {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ui-upload-'));
+    writeFileSync(path.join(dir, 'index.html'), 'x');
+    const jobs = new JobManager({
+      echo: silent,
+      defaultProvider: () => 'claude',
+      reviewerFor: () => (async () => ({ summary: 's', issues: [] })) as never,
+    });
+    const app = buildUiApp({
+      jobs,
+      publicDir: dir,
+      listPullRequests: async () => [],
+      getStatus: async () => ({ github: { configured: true }, model: { kind: 'anthropic' } }),
+      uploads: options.uploads,
+      auth: options.password ? createAuth({ password: options.password }) : undefined,
+      versionReview: (async (input: { newFiles: Map<string, Buffer>; oldFiles?: Map<string, Buffer>; useAi: boolean }, deps: { review?: unknown }) => {
+        options.seen.push({ files: [...input.newFiles.keys()], old: input.oldFiles ? [...input.oldFiles.keys()] : undefined, useAi: input.useAi, reviewer: typeof deps.review === 'function' });
+        return { summary: 'ok', findings: [] };
+      }) as never,
+    });
+    const server = app.listen(0, '127.0.0.1');
+    await new Promise((r) => server.once('listening', r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    return { server, base, jobs, dir };
+  }
+  const post = (base: string, body: unknown, headers: Record<string, string> = {}) =>
+    fetch(`${base}/api/local-uploads`, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: JSON.stringify(body) });
+
+  test('reviews uploaded files with the selected AI, and compares with an optional previous version', async () => {
+    const seen: Array<{ files: string[]; old?: string[]; useAi: boolean; reviewer: boolean }> = [];
+    const { server, base, jobs, dir } = await start({ seen });
+    try {
+      const res = await post(base, { name: 'My solution', newVersion: upload(['a.plsql', 'new'], ['b.plsql', 'x']), oldVersion: upload(['a.plsql', 'old']) });
+      assert.equal(res.status, 202);
+      const job = (await res.json()) as { id: string; kind: string; label: string; provider: string };
+      assert.deepEqual([job.kind, job.provider, job.label], ['local', 'claude', 'My solution (compared with the previous version)']);
+      for (let i = 0; i < 50 && jobs.get(job.id)?.status !== 'done'; i += 1) await new Promise((r) => setTimeout(r, 40));
+      assert.equal(jobs.get(job.id)?.status, 'done');
+      assert.deepEqual(seen, [{ files: ['a.plsql', 'b.plsql'], old: ['a.plsql'], useAi: true, reviewer: true }]);
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('rule checks only (AI off) never builds the AI reviewer, so a missing key cannot block it', async () => {
+    const seen: Array<{ files: string[]; old?: string[]; useAi: boolean; reviewer: boolean }> = [];
+    const { server, base, dir } = await start({ seen });
+    try {
+      const res = await post(base, { newVersion: upload(['a.js', '1']), useAi: false });
+      assert.equal(res.status, 202);
+      for (let i = 0; i < 50 && seen.length === 0; i += 1) await new Promise((r) => setTimeout(r, 40));
+      assert.deepEqual(seen.map((s) => [s.useAi, s.reviewer]), [[false, false]]);
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('bad uploads are a plain 400 with the reason; a big body is accepted only behind the login', async () => {
+    const seen: Array<{ files: string[]; old?: string[]; useAi: boolean; reviewer: boolean }> = [];
+    const { server, base, dir } = await start({ seen, password: 'open sesame' });
+    try {
+      const big = { newVersion: upload(['a.js', 'x'.repeat(300_000)]) };
+      assert.equal((await post(base, big)).status, 401, 'not signed in: refused before the body is read');
+
+      const login = await fetch(`${base}/api/login`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: 'open sesame' }) });
+      const cookie = (login.headers.get('set-cookie') ?? '').split(';')[0] as string;
+      const signedIn = { cookie };
+
+      assert.equal((await post(base, big, signedIn)).status, 202, 'more than the normal 100 KB limit, but under the upload limit');
+      const none = await post(base, { newVersion: { files: [] } }, signedIn);
+      assert.equal(none.status, 400);
+      assert.match(((await none.json()) as { error: string }).error, /Choose the new version files first/);
+      assert.equal((await post(base, {}, signedIn)).status, 400);
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('can be turned off', async () => {
+    const seen: Array<{ files: string[]; old?: string[]; useAi: boolean; reviewer: boolean }> = [];
+    const { server, base, dir } = await start({ seen, uploads: false });
+    try {
+      assert.deepEqual(await (await fetch(`${base}/api/uploads`)).json(), { available: false });
+      assert.equal((await post(base, { newVersion: upload(['a.js', '1']) })).status, 404);
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('says what it accepts', async () => {
+    const { server, base, dir } = await start({ seen: [] });
+    try {
+      const info = (await (await fetch(`${base}/api/uploads`)).json()) as { available: boolean; maxTotalBytes: number; maxFiles: number };
+      assert.equal(info.available, true);
+      assert.ok(info.maxTotalBytes > 0 && info.maxFiles > 0);
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

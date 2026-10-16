@@ -156,6 +156,11 @@
   .stat .big { font-size: 26px; font-weight: 700; line-height: 1.15; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
   .stat .label { font-size: 12.5px; color: var(--muted); }
   .stat.wide { grid-column: 1 / -1; }
+  details.upload { margin-top: 16px; font-size: 14px; color: var(--text); }
+  details.upload > summary { font-size: 15px; }
+  .upload-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 14px 0; }
+  .upload-box { border: 1px dashed var(--border); border-radius: 12px; padding: 12px 14px; background: var(--surface-2); }
+  .upload-box .btns { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 6px; }
   .usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
   .usage-grid .big { font-size: 24px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
   .usage-grid .label { font-size: 12.5px; color: var(--muted); }
@@ -211,6 +216,14 @@
     <label class="check"><input type="checkbox" id="autopost"> Post comments to GitHub automatically (skip the preview)</label>
     <div class="switch-row"><label class="check" style="margin:0"><input type="checkbox" id="autoreview"> Auto-review new pull requests and new commits</label><span id="autostatus"></span></div>
   </section>
+
+  <details class="card pad upload" id="uploadcard" hidden>
+    <summary><strong>Review files or folders from your computer</strong> <span class="hint">— no pull request needed</span></summary>
+    <p class="hint">Choose the files, a whole folder or one ZIP. Add the previous version too if you only want what changed reviewed. The files are read in memory on the server and are not saved. With Claude selected the code is sent to Anthropic's API; with Ollama it stays on the computer running Ollama.</p>
+    <div class="upload-grid" id="uploadboxes"></div>
+    <label class="check"><input type="checkbox" id="upai" checked> Also ask the AI (slower; the rule checks always run)</label>
+    <div class="actions"><button class="primary" id="uprun">Review these files</button></div>
+  </details>
 
   <section class="stats" id="stats" hidden aria-label="Overview"></section>
 
@@ -568,6 +581,93 @@
     }).then(function () { $('load').disabled = false; $('load').textContent = 'Load pull requests'; });
   }
 
+  // ---- review files, a folder or a ZIP chosen in the browser
+  var uploadInfo = null;
+  var picks = { newer: { files: [], skipped: 0 }, older: { files: [], skipped: 0 } };
+  var BINARY_EXT = /\.(png|jpe?g|gif|bmp|ico|webp|pdf|exe|dll|so|class|jar|war|bin|mp[34]|avi|mov|woff2?|ttf|eot|7z|rar|gz|tar|tgz|dmg|iso|pyc|obj|lib|docx?|xlsx?|pptx?)$/i;
+  var SKIP_DIR = /(^|\/)(\.git|node_modules)\//;
+  var MAX_FILE_BYTES = 1024 * 1024; // larger files are not reviewed as text anyway
+
+  function fmtBytes(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
+  function pickedBytes(which) { return picks[which].files.reduce(function (n, f) { return n + f.file.size; }, 0); }
+
+  function choose(which, list) {
+    var all = Array.prototype.map.call(list, function (f) { return { path: f.webkitRelativePath || f.name, file: f }; });
+    var lone = all.length === 1 && /\.zip$/i.test(all[0].path);
+    var keep = lone ? all : all.filter(function (f) { return !SKIP_DIR.test('/' + f.path) && !BINARY_EXT.test(f.path) && f.file.size <= MAX_FILE_BYTES; });
+    picks[which] = { files: keep, skipped: all.length - keep.length };
+    renderUploadBoxes();
+  }
+
+  function renderUploadBoxes() {
+    var box = $('uploadboxes');
+    box.textContent = '';
+    [['newer', 'New version', 'Required. The files you want reviewed.'], ['older', 'Previous version', 'Optional. When given, only what changed is reviewed.']].forEach(function (def) {
+      var which = def[0], pick = picks[which];
+      function input(folder) {
+        var i = el('input', { type: 'file', hidden: '' });
+        if (folder) { i.setAttribute('webkitdirectory', ''); i.setAttribute('directory', ''); } else { i.multiple = true; }
+        i.addEventListener('change', function () { if (i.files && i.files.length) choose(which, i.files); i.value = ''; });
+        return i;
+      }
+      var files = input(false), folder = input(true);
+      var status = pick.files.length
+        ? pick.files.length + ' file' + (pick.files.length === 1 ? '' : 's') + ' · ' + fmtBytes(pickedBytes(which)) + (pick.skipped ? ' · ' + pick.skipped + ' skipped (binary, very large, .git or node_modules)' : '')
+        : 'Nothing chosen yet.';
+      box.appendChild(el('div', { class: 'upload-box' },
+        el('strong', { text: def[1] }), el('div', { class: 'hint', text: def[2] }),
+        el('div', { class: 'btns' },
+          el('button', { class: 'ghost', text: 'Choose files or a ZIP', on: { click: function () { files.click(); } } }),
+          el('button', { class: 'ghost', text: 'Choose a folder', on: { click: function () { folder.click(); } } }),
+          pick.files.length ? el('button', { class: 'ghost', text: 'Clear', on: { click: function () { picks[which] = { files: [], skipped: 0 }; renderUploadBoxes(); } } }) : null),
+        el('div', { class: 'hint', text: status }), files, folder));
+    });
+  }
+
+  function readBase64(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(String(reader.result).split(',')[1] || ''); };
+      reader.onerror = function () { reject(new Error('Could not read ' + file.name)); };
+      reader.readAsDataURL(file);
+    });
+  }
+  function encodePick(pick) {
+    return Promise.all(pick.files.map(function (f) { return readBase64(f.file).then(function (data) { return { path: f.path, data: data }; }); }));
+  }
+  function nameOf(pick) {
+    var first = pick.files[0];
+    if (!first) return 'Uploaded files';
+    if (pick.files.length === 1) return first.path.split('/').pop();
+    return first.path.indexOf('/') > 0 ? first.path.split('/')[0] : pick.files.length + ' files';
+  }
+
+  function runUpload() {
+    if (!picks.newer.files.length) { toast('Choose the new version first.'); return; }
+    var total = pickedBytes('newer') + pickedBytes('older');
+    if (uploadInfo && total > uploadInfo.maxTotalBytes) { toast('That is ' + fmtBytes(total) + ' - this server accepts up to ' + fmtBytes(uploadInfo.maxTotalBytes) + '. Choose fewer files.'); return; }
+    var button = $('uprun');
+    button.disabled = true; button.textContent = 'Uploading…';
+    Promise.all([encodePick(picks.newer), picks.older.files.length ? encodePick(picks.older) : Promise.resolve(null)]).then(function (parts) {
+      var body = { name: nameOf(picks.newer), useAi: $('upai').checked, newVersion: { files: parts[0] } };
+      if (parts[1]) body.oldVersion = { files: parts[1] };
+      return api('/api/local-uploads', { method: 'POST', body: body });
+    }).then(function (job) {
+      picks = { newer: { files: [], skipped: 0 }, older: { files: [], skipped: 0 } };
+      renderUploadBoxes();
+      state.openJobId = job.id;
+      return pollJobs().then(function () { $('panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+    }).catch(function (err) { toast(err.message); })
+      .then(function () { button.disabled = false; button.textContent = 'Review these files'; });
+  }
+  function loadUploads() {
+    return api('/api/uploads').then(function (info) {
+      uploadInfo = info;
+      $('uploadcard').hidden = !info.available;
+      if (info.available) renderUploadBoxes();
+    }).catch(function () { $('uploadcard').hidden = true; });
+  }
+
   // ---- reviews
   function startReview(pr) {
     api('/api/jobs', { method: 'POST', body: { owner: state.loaded.owner, repo: state.loaded.repo, pr: pr.number, autoPost: $('autopost').checked } })
@@ -844,9 +944,10 @@
   function startApp() {
     showApp();
     renderPrs(); renderJobs();
-    refreshStatus(); loadAuto(); loadRules(); loadAccuracy();
+    refreshStatus(); loadAuto(); loadRules(); loadAccuracy(); loadUploads();
     if (started) { pollJobs(); return; }
     started = true;
+    $('uprun').addEventListener('click', runUpload);
     $('owner').value = store.get('owner');
     $('repo').value = store.get('repo');
     setInterval(function () { if (!$('app').hidden) { refreshStatus(); loadAuto(); } }, 15000);
