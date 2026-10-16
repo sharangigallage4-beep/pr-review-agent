@@ -13,3 +13,13 @@ test('the web page script is valid JavaScript', () => {
     assert.doesNotThrow(() => new vm.Script(source), 'the inline script must compile');
   }
 });
+
+// A second function with an existing name silently replaces the first (the later one wins), which once made the
+// header chips disappear. Nothing else would notice, so duplicates are refused here.
+test('the web page script declares every function name only once', () => {
+  const html = readFileSync(new URL('./public/index.html', import.meta.url), 'utf8');
+  const source = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1] as string).join('\n');
+  const names = [...source.matchAll(/^\s*function (\w+)\(/gm)].map((m) => m[1] as string);
+  const duplicates = [...new Set(names.filter((n, i) => names.indexOf(n) !== i))];
+  assert.deepEqual(duplicates, []);
+});

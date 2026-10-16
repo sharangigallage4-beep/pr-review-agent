@@ -735,7 +735,7 @@
     return entries.reduce(function (chain, entry) { return chain.then(function () { return walkEntry(entry, out); }); }, Promise.resolve()).then(function () { return out; });
   }
 
-  function renderStatus(id, which) {
+  function renderPickStatus(id, which) {
     var box = $(id), pick = picks[which];
     box.textContent = '';
     box.className = 'dz-status' + (pick.files.length ? ' has' : '');
@@ -744,7 +744,7 @@
     if (pick.skipped) box.appendChild(el('span', { class: 'note', text: pick.skipped + ' left out (binary, very large, .git or node_modules)' }));
     box.appendChild(el('button', { class: 'link', type: 'button', text: 'Clear', on: { click: function () { picks[which] = { files: [], skipped: 0 }; renderUploadStatus(); } } }));
   }
-  function renderUploadStatus() { renderStatus('st-new', 'newer'); renderStatus('st-old', 'older'); }
+  function renderUploadStatus() { renderPickStatus('st-new', 'newer'); renderPickStatus('st-old', 'older'); }
 
   function setOldMode(mode) {
     oldMode = mode;
