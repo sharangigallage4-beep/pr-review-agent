@@ -97,7 +97,7 @@ export interface RequestReviewParams {
   provider?: ResolvedProvider;
   maxTokens?: number;
   /** Told how many tokens each response used, so the UI can show what a review cost. */
-  onUsage?: (usage: { inputTokens: number; outputTokens: number; model: string }) => void;
+  onUsage?: (usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; model: string }) => void;
 }
 
 /**
@@ -106,6 +106,18 @@ export interface RequestReviewParams {
  * and no ANTHROPIC_API_KEY set - `model` on its own is also enough to skip loadReviewConfig()
  * entirely when a client is supplied.
  */
+/**
+ * Whether the fixed part of the request (the instructions and the team rules) is marked for Anthropic's prompt
+ * cache. The rules are the same for every pull request, so a review made soon after another one (the cache lasts
+ * about five minutes) is charged for those tokens at a fraction of the normal price instead of in full. Only for
+ * Claude itself - an Ollama server has no such cache. CLAUDE_PROMPT_CACHE=off turns it off.
+ */
+export function promptCachingOn(provider: ResolvedProvider | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  if ((env.CLAUDE_PROMPT_CACHE ?? '').trim().toLowerCase() === 'off') return false;
+  if (provider) return provider.id === 'claude';
+  return !(env.ANTHROPIC_BASE_URL ?? '').trim();
+}
+
 export async function requestReview(
   { systemPrompt, userMessage, model, maxTokens, provider, onUsage }: RequestReviewParams,
   injectedClient?: Anthropic
@@ -123,7 +135,9 @@ export async function requestReview(
     // ~77KB diff hit exactly this on 2026-09-03. 16000 is the documented safe default for a
     // non-streaming request (stays comfortably under SDK HTTP timeouts).
     max_tokens: maxTokens ?? 16000,
-    system: systemPrompt,
+    system: promptCachingOn(provider)
+      ? [{ type: 'text' as const, text: systemPrompt, cache_control: { type: 'ephemeral' as const } }]
+      : systemPrompt,
     messages: [{ role: 'user', content: userMessage }],
     tools: [buildReviewTool()],
     tool_choice: toolChoice,
@@ -149,8 +163,11 @@ export async function requestReview(
   const used = response.usage;
   if (used && onUsage) {
     onUsage({
-      inputTokens: (used.input_tokens ?? 0) + (used.cache_creation_input_tokens ?? 0) + (used.cache_read_input_tokens ?? 0),
+      // Counted apart: tokens read from the cache cost a fraction, tokens written to it a little extra.
+      inputTokens: used.input_tokens ?? 0,
       outputTokens: used.output_tokens ?? 0,
+      cacheReadTokens: used.cache_read_input_tokens ?? 0,
+      cacheWriteTokens: used.cache_creation_input_tokens ?? 0,
       model: resolvedModel,
     });
   }

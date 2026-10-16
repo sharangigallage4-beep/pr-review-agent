@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { requestReview, parseTextToolCall } from './claudeClient.js';
+import { requestReview, parseTextToolCall, promptCachingOn } from './claudeClient.js';
 import type Anthropic from '@anthropic-ai/sdk';
 
 // A fake shaped just enough like the Anthropic client for requestReview's own use of it -
@@ -177,11 +177,11 @@ describe('requestReview with an explicit provider', () => {
 describe('requestReview usage reporting', () => {
   const ok = { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'submit_review', input: { summary: 'ok', issues: [] } }] };
 
-  test('reports the tokens a response used, cache tokens included', async () => {
+  test('reports the tokens a response used, cache reads and writes counted apart', async () => {
     const seen: unknown[] = [];
     const client = fakeClient(async () => ({ ...ok, usage: { input_tokens: 100, cache_creation_input_tokens: 20, cache_read_input_tokens: 5, output_tokens: 40 } }));
     await requestReview({ ...baseParams, onUsage: (u) => seen.push(u) }, client);
-    assert.deepEqual(seen, [{ inputTokens: 125, outputTokens: 40, model: 'claude-sonnet-5' }]);
+    assert.deepEqual(seen, [{ inputTokens: 100, outputTokens: 40, cacheReadTokens: 5, cacheWriteTokens: 20, model: 'claude-sonnet-5' }]);
   });
 
   test('a response cut off by max_tokens is still counted, since it was paid for', async () => {
@@ -195,5 +195,41 @@ describe('requestReview usage reporting', () => {
     const seen: unknown[] = [];
     await requestReview({ ...baseParams, onUsage: (u) => seen.push(u) }, fakeClient(async () => ok));
     assert.deepEqual(seen, []);
+  });
+});
+
+describe('prompt caching of the fixed instructions and team rules', () => {
+  const ok = { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'submit_review', input: { summary: 'ok', issues: [] } }] };
+  const claude = { id: 'claude' as const, apiKey: 'k', baseURL: 'https://api.anthropic.com', model: 'claude-sonnet-5-5' };
+  const ollama = { id: 'ollama' as const, apiKey: 'ollama', baseURL: 'http://localhost:11434', model: 'q' };
+
+  test('on for Claude, off for Ollama, and off when switched off', () => {
+    assert.equal(promptCachingOn(claude, {}), true);
+    assert.equal(promptCachingOn(ollama, {}), false);
+    assert.equal(promptCachingOn(claude, { CLAUDE_PROMPT_CACHE: 'off' }), false);
+    assert.equal(promptCachingOn(claude, { CLAUDE_PROMPT_CACHE: ' OFF ' }), false);
+    // Without a chosen provider: Claude when no other server address is set (GitHub Actions), not with an Ollama address.
+    assert.equal(promptCachingOn(undefined, {}), true);
+    assert.equal(promptCachingOn(undefined, { ANTHROPIC_BASE_URL: 'http://localhost:11434' }), false);
+  });
+
+  test('a Claude request marks the system prompt for the cache; the text itself is unchanged', async () => {
+    let system: unknown;
+    const client = fakeClient(async (params) => {
+      system = (params as { system: unknown }).system;
+      return ok;
+    });
+    await requestReview({ ...baseParams, provider: claude }, client);
+    assert.deepEqual(system, [{ type: 'text', text: 'system', cache_control: { type: 'ephemeral' } }]);
+  });
+
+  test('an Ollama request sends the system prompt as plain text, with no cache marker', async () => {
+    let system: unknown;
+    const client = fakeClient(async (params) => {
+      system = (params as { system: unknown }).system;
+      return ok;
+    });
+    await requestReview({ ...baseParams, provider: ollama }, client);
+    assert.equal(system, 'system');
   });
 });

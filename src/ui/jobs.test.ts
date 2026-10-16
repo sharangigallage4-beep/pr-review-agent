@@ -338,7 +338,7 @@ describe('JobManager usage', () => {
     });
     const job = jobs.start('acme', 'w', 9);
     await waitFor(job, (j) => j.status === 'skipped');
-    assert.deepEqual(job.usage, { inputTokens: 1500, outputTokens: 250, requests: 2 });
+    assert.deepEqual(job.usage, { inputTokens: 1500, outputTokens: 250, cacheReadTokens: 0, cacheWriteTokens: 0, requests: 2 });
   });
 });
 
@@ -363,7 +363,7 @@ describe('JobManager local reviews and the selected AI', () => {
     await waitFor(withoutAi, (j) => j.status === 'done');
     assert.deepEqual([withAi.provider, withoutAi.provider], ['claude', 'claude']);
     assert.deepEqual(built, ['claude']);
-    assert.deepEqual(withAi.usage, { inputTokens: 700, outputTokens: 70, requests: 1 });
+    assert.deepEqual(withAi.usage, { inputTokens: 700, outputTokens: 70, cacheReadTokens: 0, cacheWriteTokens: 0, requests: 1 });
     assert.equal(withoutAi.usage, undefined);
   });
 

@@ -5,7 +5,7 @@ import type { ReviewPreview, ReviewPullRequestOutcome } from '../workflow/review
 import { consoleLogger, toSafeLogFields } from '../workflow/logger.js';
 import type { ReviewIssue } from '../review/types.js';
 import type { ProviderId } from '../review/providers.js';
-import { addUsage, type Usage } from './usage.js';
+import { addUsage, type TokenCounts, type Usage } from './usage.js';
 import type { ReviewPullRequestDeps } from '../workflow/reviewPullRequestWorkflow.js';
 
 export type JobStatus =
@@ -95,7 +95,7 @@ export interface JobManagerOptions {
    * Builds the review function for a provider; it may throw a message for the user (for example when
    * the Claude key is missing), which then fails that review with that message.
    */
-  reviewerFor?: (provider: ProviderId, onUsage: (usage: { inputTokens: number; outputTokens: number }) => void) => ReviewPullRequestDeps['runClaudeReview'];
+  reviewerFor?: (provider: ProviderId, onUsage: (usage: TokenCounts) => void) => ReviewPullRequestDeps['runClaudeReview'];
 }
 
 const MAX_LOG_LINES = 200;

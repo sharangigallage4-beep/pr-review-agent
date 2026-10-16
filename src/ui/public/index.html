@@ -463,7 +463,7 @@
     if (!u || !u.available || (!u.reviews && u.percentUsed === undefined)) return null;
     var text = 'Claude ' + u.month + ': ' + fmtTokens(u.totalTokens) + ' tokens' + (u.costUsd !== undefined ? ' ≈ ' + fmtUsd(u.costUsd) : '');
     if (u.percentUsed !== undefined) text += ' · ' + u.percentUsed + '% of limit';
-    var lines = [u.reviews + ' review(s) this month: ' + u.inputTokens.toLocaleString() + ' tokens in, ' + u.outputTokens.toLocaleString() + ' tokens out.'];
+    var lines = [u.reviews + ' review(s) this month: ' + (u.inputTokens + u.cacheWriteTokens).toLocaleString() + ' tokens in, ' + u.outputTokens.toLocaleString() + ' tokens out' + (u.cacheReadTokens ? ', and ' + u.cacheReadTokens.toLocaleString() + ' input tokens served from the cache at a fraction of the price.' : '.')];
     if (!u.priced) lines.push('No prices set, so no cost is shown (CLAUDE_PRICE_INPUT_PER_MTOK / CLAUDE_PRICE_OUTPUT_PER_MTOK in .env).');
     else lines.push('The cost is an estimate from the prices set in .env.');
     if (u.limits.tokens) lines.push('Token limit per month: ' + u.limits.tokens.toLocaleString());
@@ -483,7 +483,8 @@
     function cell(big, label) { return el('div', null, el('div', { class: 'big', text: big }), el('div', { class: 'label', text: label })); }
     box.appendChild(el('div', { class: 'usage-grid' },
       cell(String(u.reviews), 'Claude reviews this month'),
-      cell(fmtTokens(u.inputTokens), 'tokens sent (input)'),
+      cell(fmtTokens(u.inputTokens + u.cacheWriteTokens), 'tokens sent (input)'),
+      u.cacheReadTokens ? cell(fmtTokens(u.cacheReadTokens), 'input from the cache (cheap)') : null,
       cell(fmtTokens(u.outputTokens), 'tokens written (output)'),
       cell(u.costUsd !== undefined ? '≈ ' + fmtUsd(u.costUsd) : '—', u.priced ? 'estimated cost' : 'cost: set the prices in .env')));
     if (u.percentUsed !== undefined) {
@@ -946,7 +947,7 @@
       el('span', { class: 'badge ' + job.status, text: STATUS_TEXT[job.status] })));
     if (job.usage) {
       var entry = state.usage && state.usage.recent ? state.usage.recent.filter(function (r) { return r.id === job.id; })[0] : null;
-      panel.appendChild(el('p', { class: 'hint', text: 'Used ' + job.usage.inputTokens.toLocaleString() + ' tokens in and ' + job.usage.outputTokens.toLocaleString() + ' out' + (entry && entry.costUsd !== undefined ? ' (≈ ' + fmtUsd(entry.costUsd) + ')' : '') + '.' }));
+      panel.appendChild(el('p', { class: 'hint', text: 'Used ' + (job.usage.inputTokens + (job.usage.cacheWriteTokens || 0)).toLocaleString() + ' tokens in' + (job.usage.cacheReadTokens ? ' (+ ' + job.usage.cacheReadTokens.toLocaleString() + ' from the cache)' : '') + ' and ' + job.usage.outputTokens.toLocaleString() + ' out' + (entry && entry.costUsd !== undefined ? ' (≈ ' + fmtUsd(entry.costUsd) + ')' : '') + '.' }));
     }
 
     if (job.status === 'queued' || job.status === 'running') {
@@ -1022,7 +1023,7 @@
     return api('/api/jobs').then(function (data) {
       state.jobs = data.jobs; renderJobs(); renderPrs(); renderStats(); renderPanel(); loadAccuracy();
       // When a review has used more tokens, the header's usage chip is out of date.
-      var usageSig = state.jobs.reduce(function (n, j) { return n + (j.usage ? j.usage.inputTokens + j.usage.outputTokens : 0); }, 0);
+      var usageSig = state.jobs.reduce(function (n, j) { return n + (j.usage ? j.usage.inputTokens + j.usage.outputTokens + (j.usage.cacheReadTokens || 0) + (j.usage.cacheWriteTokens || 0) : 0); }, 0);
       if (usageSig !== state.usageSig) { state.usageSig = usageSig; refreshStatus(); }
       var anyActive = state.jobs.some(function (j) { return ACTIVE[j.status]; });
       clearTimeout(timer);

@@ -10,12 +10,23 @@ import type { Job } from './jobs.js';
  * CLAUDE_MONTHLY_BUDGET_USD (needs the prices above). Once a cap is reached, new Claude reviews are
  * refused with a message until the next month; Ollama reviews are not affected.
  */
-export interface Usage {
+export interface TokenCounts {
   inputTokens: number;
   outputTokens: number;
+  /** Input read from the prompt cache (billed at a fraction of the normal input price). */
+  cacheReadTokens?: number;
+  /** Input written to the prompt cache (billed a little above the normal input price). */
+  cacheWriteTokens?: number;
+}
+
+export interface Usage extends TokenCounts {
   /** How many requests to the model were made. */
   requests: number;
 }
+
+// Anthropic's prompt-cache prices relative to the normal input price: reading costs a tenth, writing a quarter more.
+const CACHE_READ_FACTOR = 0.1;
+const CACHE_WRITE_FACTOR = 1.25;
 
 export interface Pricing {
   inputPerMTok: number;
@@ -29,6 +40,9 @@ export interface UsageSummary {
   reviews: number;
   inputTokens: number;
   outputTokens: number;
+  /** Input that came from the prompt cache (cheap) and input written to it. */
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
   totalTokens: number;
   /** Estimated cost in US dollars; absent when no prices are configured. */
   costUsd?: number;
@@ -38,7 +52,7 @@ export interface UsageSummary {
   percentUsed?: number;
   exceeded: boolean;
   /** The newest Claude reviews with their own numbers. */
-  recent: Array<{ id: string; label: string; createdAt: string; inputTokens: number; outputTokens: number; costUsd?: number }>;
+  recent: Array<{ id: string; label: string; createdAt: string; inputTokens: number; outputTokens: number; cacheReadTokens: number; costUsd?: number }>;
 }
 
 const positive = (value: string | undefined): number | undefined => {
@@ -52,15 +66,19 @@ export function pricingFrom(env: NodeJS.ProcessEnv): Pricing | undefined {
   return inputPerMTok !== undefined && outputPerMTok !== undefined ? { inputPerMTok, outputPerMTok } : undefined;
 }
 
-export function costOf(usage: Pick<Usage, 'inputTokens' | 'outputTokens'>, pricing: Pricing | undefined): number | undefined {
+export function costOf(usage: TokenCounts, pricing: Pricing | undefined): number | undefined {
   if (!pricing) return undefined;
-  return (usage.inputTokens * pricing.inputPerMTok + usage.outputTokens * pricing.outputPerMTok) / 1_000_000;
+  const input =
+    usage.inputTokens + (usage.cacheReadTokens ?? 0) * CACHE_READ_FACTOR + (usage.cacheWriteTokens ?? 0) * CACHE_WRITE_FACTOR;
+  return (input * pricing.inputPerMTok + usage.outputTokens * pricing.outputPerMTok) / 1_000_000;
 }
 
-export function addUsage(total: Usage | undefined, more: { inputTokens: number; outputTokens: number }): Usage {
+export function addUsage(total: Usage | undefined, more: TokenCounts): Usage {
   return {
     inputTokens: (total?.inputTokens ?? 0) + more.inputTokens,
     outputTokens: (total?.outputTokens ?? 0) + more.outputTokens,
+    cacheReadTokens: (total?.cacheReadTokens ?? 0) + (more.cacheReadTokens ?? 0),
+    cacheWriteTokens: (total?.cacheWriteTokens ?? 0) + (more.cacheWriteTokens ?? 0),
     requests: (total?.requests ?? 0) + 1,
   };
 }
@@ -75,8 +93,10 @@ export function summarizeUsage(jobs: readonly Job[], env: NodeJS.ProcessEnv, now
 
   const inputTokens = thisMonth.reduce((sum, j) => sum + (j.usage?.inputTokens ?? 0), 0);
   const outputTokens = thisMonth.reduce((sum, j) => sum + (j.usage?.outputTokens ?? 0), 0);
-  const totalTokens = inputTokens + outputTokens;
-  const costUsd = costOf({ inputTokens, outputTokens }, pricing);
+  const cacheReadTokens = thisMonth.reduce((sum, j) => sum + (j.usage?.cacheReadTokens ?? 0), 0);
+  const cacheWriteTokens = thisMonth.reduce((sum, j) => sum + (j.usage?.cacheWriteTokens ?? 0), 0);
+  const totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+  const costUsd = costOf({ inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens }, pricing);
 
   const tokenLimit = positive(env.CLAUDE_MONTHLY_TOKEN_LIMIT);
   // A dollar cap can only be checked when prices are known; without them it is ignored (and says so in the docs).
@@ -93,6 +113,8 @@ export function summarizeUsage(jobs: readonly Job[], env: NodeJS.ProcessEnv, now
     reviews: thisMonth.length,
     inputTokens,
     outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
     totalTokens,
     ...(costUsd !== undefined ? { costUsd } : {}),
     priced: pricing !== undefined,
@@ -107,6 +129,7 @@ export function summarizeUsage(jobs: readonly Job[], env: NodeJS.ProcessEnv, now
         createdAt: j.createdAt,
         inputTokens: j.usage?.inputTokens ?? 0,
         outputTokens: j.usage?.outputTokens ?? 0,
+        cacheReadTokens: j.usage?.cacheReadTokens ?? 0,
         ...(cost !== undefined ? { costUsd: cost } : {}),
       };
     }),

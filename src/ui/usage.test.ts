@@ -26,7 +26,13 @@ describe('pricing and cost', () => {
 
   test('addUsage adds up tokens and counts requests', () => {
     const once = addUsage(undefined, { inputTokens: 10, outputTokens: 2 });
-    assert.deepEqual(addUsage(once, { inputTokens: 5, outputTokens: 1 }), { inputTokens: 15, outputTokens: 3, requests: 2 });
+    assert.deepEqual(addUsage(once, { inputTokens: 5, outputTokens: 1, cacheReadTokens: 100 }), {
+      inputTokens: 15,
+      outputTokens: 3,
+      cacheReadTokens: 100,
+      cacheWriteTokens: 0,
+      requests: 2,
+    });
   });
 });
 
@@ -95,5 +101,24 @@ describe('budgetProblem', () => {
     assert.match(message, /monthly Claude limit has been reached/);
     assert.match(message, /10,000 of 10,000 tokens/);
     assert.match(message, /Ollama/);
+  });
+});
+
+describe('prompt cache in the numbers', () => {
+  const prices = { CLAUDE_PRICE_INPUT_PER_MTOK: '10', CLAUDE_PRICE_OUTPUT_PER_MTOK: '50' };
+
+  test('cached input costs a tenth, written input a quarter more, and both count as tokens', () => {
+    const pricing = pricingFrom(env(prices));
+    // 1M normal + 1M read (x0.1) + 1M written (x1.25) = 2.35M input-equivalents; 0.1M output
+    const cost = costOf({ inputTokens: 1_000_000, cacheReadTokens: 1_000_000, cacheWriteTokens: 1_000_000, outputTokens: 100_000 }, pricing);
+    assert.ok(Math.abs((cost ?? 0) - (23.5 + 5)) < 1e-9);
+
+    const summary = summarizeUsage([claude('a', 1000, 100, { usage: { inputTokens: 1000, outputTokens: 100, cacheReadTokens: 4000, cacheWriteTokens: 500, requests: 1 } })], env({}), NOW);
+    assert.deepEqual([summary.cacheReadTokens, summary.cacheWriteTokens, summary.totalTokens], [4000, 500, 5600]);
+  });
+
+  test('reviews saved before caching existed (no cache numbers) still add up', () => {
+    const summary = summarizeUsage([claude('old', 1000, 100)], env({}), NOW);
+    assert.deepEqual([summary.cacheReadTokens, summary.totalTokens], [0, 1100]);
   });
 });
