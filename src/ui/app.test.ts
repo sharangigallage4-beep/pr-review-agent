@@ -752,3 +752,84 @@ describe('review UI app: an already reviewed commit', () => {
     }
   });
 });
+
+describe('review UI app: comparing with a GitHub branch', () => {
+  const b64 = (text: string) => Buffer.from(text).toString('base64');
+
+  async function start(withBranches: boolean, seen: Array<{ old?: string[]; label: string }>) {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ui-branch-'));
+    writeFileSync(path.join(dir, 'index.html'), 'x');
+    const requested: string[] = [];
+    const server = buildUiApp({
+      jobs: new JobManager({ echo: silent }),
+      publicDir: dir,
+      listPullRequests: async () => [],
+      getStatus: async () => ({ github: { configured: true }, model: { kind: 'anthropic' } }),
+      ...(withBranches
+        ? {
+            listBranches: async (owner: string, repo: string) => [{ name: 'main', isDefault: true }, { name: `${owner}-${repo}`, isDefault: false }],
+            loadBranch: async (owner: string, repo: string, branch: string) => {
+              requested.push(`${owner}/${repo}@${branch}`);
+              return { files: new Map([['old.js', Buffer.from('old')]]), notes: [] };
+            },
+          }
+        : {}),
+      versionReview: (async (input: { oldFiles?: Map<string, Buffer>; label: string }) => {
+        seen.push({ old: input.oldFiles ? [...input.oldFiles.keys()] : undefined, label: input.label });
+        return { summary: 'ok', findings: [] };
+      }) as never,
+    }).listen(0, '127.0.0.1');
+    await new Promise((r) => server.once('listening', r));
+    return { server, dir, requested, base: `http://127.0.0.1:${(server.address() as AddressInfo).port}` };
+  }
+  const post = (base: string, body: unknown) =>
+    fetch(`${base}/api/local-uploads`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  const mine = { files: [{ path: 'a.js', data: b64('new') }] };
+
+  test('lists the branches, and says whether the choice is offered', async () => {
+    const { server, dir, base } = await start(true, []);
+    try {
+      const data = (await (await fetch(`${base}/api/branches?owner=acme&repo=widgets`)).json()) as { branches: Array<{ name: string }> };
+      assert.deepEqual(data.branches.map((b) => b.name), ['main', 'acme-widgets']);
+      assert.equal(((await (await fetch(`${base}/api/uploads`)).json()) as { branches: boolean }).branches, true);
+      assert.equal((await fetch(`${base}/api/branches?owner=acme`)).status, 400);
+      assert.equal((await fetch(`${base}/api/branches?owner=a%20b&repo=x`)).status, 400);
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a branch can be the previous version: it is downloaded inside the review and named in the label', async () => {
+    const seen: Array<{ old?: string[]; label: string }> = [];
+    const { server, dir, base, requested } = await start(true, seen);
+    try {
+      const res = await post(base, { name: 'Fix', useAi: false, newVersion: mine, oldVersion: { github: { owner: 'acme', repo: 'widgets', branch: 'topic/old' } } });
+      assert.equal(res.status, 202);
+      for (let i = 0; i < 50 && seen.length === 0; i += 1) await new Promise((r) => setTimeout(r, 40));
+      assert.deepEqual(requested, ['acme/widgets@topic/old']);
+      assert.deepEqual(seen, [{ old: ['old.js'], label: 'Fix (compared with acme/widgets@topic/old)' }]);
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a bad repository or branch is a plain 400, and a server without the feature says 404', async () => {
+    const withIt = await start(true, []);
+    const without = await start(false, []);
+    try {
+      for (const github of [{ owner: 'acme', repo: 'w' }, { owner: 'acme', repo: 'w', branch: '../x' }, { owner: 'a b', repo: 'w', branch: 'main' }]) {
+        assert.equal((await post(withIt.base, { newVersion: mine, oldVersion: { github } })).status, 400, JSON.stringify(github));
+      }
+      assert.equal((await post(without.base, { newVersion: mine, oldVersion: { github: { owner: 'acme', repo: 'w', branch: 'main' } } })).status, 404);
+      assert.equal((await fetch(`${without.base}/api/branches?owner=acme&repo=w`)).status, 404);
+      assert.equal(((await (await fetch(`${without.base}/api/uploads`)).json()) as { branches: boolean }).branches, false);
+    } finally {
+      for (const x of [withIt, without]) {
+        x.server.close();
+        rmSync(x.dir, { recursive: true, force: true });
+      }
+    }
+  });
+});

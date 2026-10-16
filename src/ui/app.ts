@@ -7,6 +7,8 @@ import type { Auth } from './auth.js';
 import type { AutoReviewer } from './autoReview.js';
 import { LocalInputError, listLocalInputs, loadLocalInput } from './localInput.js';
 import { UPLOAD_LIMITS, loadUpload } from './uploadInput.js';
+import { BRANCH_PATTERN, type BranchInfo } from './githubBranches.js';
+import type { LoadedInput } from './localInput.js';
 import { runVersionReview } from './versionReview.js';
 import { ProviderError } from '../review/providers.js';
 import type { ProviderSettings } from './providerSettings.js';
@@ -63,6 +65,10 @@ export interface BuildUiAppOptions {
   localInputDir?: string;
   /** Lets people choose files, a folder or a ZIP in the browser and have them reviewed. Default true. */
   uploads?: boolean;
+  /** The branches of a GitHub repository, for choosing the previous version. Omit to hide that choice. */
+  listBranches?: (owner: string, repo: string) => Promise<BranchInfo[]>;
+  /** The files of one branch of a GitHub repository, read in memory. */
+  loadBranch?: (owner: string, repo: string, branch: string) => Promise<LoadedInput>;
   /** Injectable for tests - defaults to the real version comparison and review. */
   versionReview?: typeof runVersionReview;
   /**
@@ -354,8 +360,28 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
   const bigJson = express.json({ limit: UPLOAD_BODY_LIMIT });
 
   app.get('/api/uploads', (_req, res) => {
-    res.json(uploadsEnabled ? { available: true, maxTotalBytes: UPLOAD_LIMITS.maxTotalBytes, maxFiles: UPLOAD_LIMITS.maxFiles } : { available: false });
+    res.json(
+      uploadsEnabled
+        ? { available: true, maxTotalBytes: UPLOAD_LIMITS.maxTotalBytes, maxFiles: UPLOAD_LIMITS.maxFiles, branches: Boolean(options.listBranches && options.loadBranch) }
+        : { available: false }
+    );
   });
+
+  app.get(
+    '/api/branches',
+    handle(async (req, res) => {
+      const ref = parseRepoRef(req.query as Record<string, unknown>);
+      if (!ref) {
+        res.status(400).json({ error: 'Enter both the owner and the repository name.' });
+        return;
+      }
+      if (!options.listBranches) {
+        res.status(404).json({ error: 'Choosing a GitHub branch is not available on this server.' });
+        return;
+      }
+      res.json({ owner: ref.owner, repo: ref.repo, branches: await options.listBranches(ref.owner, ref.repo) });
+    })
+  );
 
   app.post(
     UPLOAD_PATH,
@@ -367,14 +393,35 @@ export function buildUiApp(options: BuildUiAppOptions): Express {
       }
       const { newVersion, oldVersion, useAi, name } = (req.body ?? {}) as Record<string, unknown>;
       const next = loadUpload(newVersion, 'new version');
-      const prev = oldVersion ? loadUpload(oldVersion, 'previous version') : undefined;
+      // The previous version is either uploaded files or a branch of a GitHub repository.
+      const fromGithub = (oldVersion as { github?: Record<string, unknown> } | undefined)?.github;
+      let prevBranch: { owner: string; repo: string; branch: string } | undefined;
+      if (fromGithub) {
+        const target = parseRepoRef(fromGithub);
+        const branch = fromGithub.branch;
+        if (!target || typeof branch !== 'string' || !BRANCH_PATTERN.test(branch)) {
+          res.status(400).json({ error: 'Choose the repository and the branch to compare with.' });
+          return;
+        }
+        if (!options.loadBranch) {
+          res.status(404).json({ error: 'Choosing a GitHub branch is not available on this server.' });
+          return;
+        }
+        prevBranch = { ...target, branch };
+      }
+      const prev = oldVersion && !prevBranch ? loadUpload(oldVersion, 'previous version') : undefined;
       const shownName = (typeof name === 'string' ? name : '').replace(/\p{Cc}/gu, ' ').trim().slice(0, 80) || 'Uploaded files';
-      const label = prev ? `${shownName} (compared with the previous version)` : shownName;
+      const label = prevBranch ? `${shownName} (compared with ${prevBranch.owner}/${prevBranch.repo}@${prevBranch.branch})` : prev ? `${shownName} (compared with the previous version)` : shownName;
       const ai = useAi !== false;
       const job = jobs.startLocal(label, async (log, context) => {
         log(`Reviewing ${next.files.size} uploaded file(s)`);
+        let before = prev;
+        if (prevBranch && options.loadBranch) {
+          log(`Downloading ${prevBranch.owner}/${prevBranch.repo} (branch ${prevBranch.branch}) from GitHub`);
+          before = await options.loadBranch(prevBranch.owner, prevBranch.repo, prevBranch.branch);
+        }
         return versionReview(
-          { newFiles: next.files, oldFiles: prev?.files, label, useAi: ai, notes: [...next.notes, ...(prev?.notes ?? [])] },
+          { newFiles: next.files, oldFiles: before?.files, label, useAi: ai, notes: [...next.notes, ...(before?.notes ?? [])] },
           { log, ...(ai ? { review: context.reviewer() } : {}) }
         );
       });

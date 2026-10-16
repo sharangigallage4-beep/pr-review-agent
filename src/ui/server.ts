@@ -9,6 +9,7 @@ import { AutoReviewer } from './autoReview.js';
 import { JobManager } from './jobs.js';
 import { ProviderSettings } from './providerSettings.js';
 import { budgetProblem, summarizeUsage } from './usage.js';
+import { listBranches, loadBranch } from './githubBranches.js';
 import { resolveProvider, reviewerFor } from '../review/providers.js';
 import { isLoopbackHost, platformHosts, resolveCookieSecure, resolveHost, resolvePort, resolveTrustProxy } from './hostConfig.js';
 import { listenErrorMessage } from './listenError.js';
@@ -85,6 +86,8 @@ function main(): void {
     providers,
     usage: () => summarizeUsage(jobs.list(), process.env),
     // PR_REVIEW_UI_UPLOADS=off turns off reviewing files chosen in the browser (for example on a shared server).
+    listBranches: (owner, repo) => listBranches(owner, repo, token),
+    loadBranch: (owner, repo, branch) => loadBranch(owner, repo, branch, token),
     uploads: (process.env.PR_REVIEW_UI_UPLOADS ?? '').trim().toLowerCase() !== 'off',
     publicDir: path.join(here, 'public'),
     allowedHosts,

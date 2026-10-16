@@ -157,10 +157,35 @@
   .stat .label { font-size: 12.5px; color: var(--muted); }
   .stat.wide { grid-column: 1 / -1; }
   details.upload { margin-top: 16px; font-size: 14px; color: var(--text); }
-  details.upload > summary { font-size: 15px; }
-  .upload-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 14px 0; }
-  .upload-box { border: 1px dashed var(--border); border-radius: 12px; padding: 12px 14px; background: var(--surface-2); }
-  .upload-box .btns { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 6px; }
+  details.upload > summary { font-size: 15px; list-style-position: inside; }
+  .steps { margin-top: 14px; display: grid; gap: 0; }
+  .step { display: grid; grid-template-columns: 32px 1fr; gap: 14px; padding: 16px 0; border-top: 1px solid var(--border); }
+  .step:first-child { border-top: 0; padding-top: 6px; }
+  .step-n { width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 700; font-size: 13px; margin-top: 1px; }
+  .step h3 { margin: 0 0 2px; font-size: 15px; font-weight: 650; }
+  .step h3 .optional { font-weight: 400; color: var(--muted); font-size: 13px; }
+  .step .sub { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  .dropzone { border: 1.5px dashed var(--border); border-radius: 12px; padding: 18px 16px; text-align: center; background: var(--surface-2); transition: border-color .12s, background .12s; }
+  .dropzone.over { border-color: var(--accent); background: var(--accent-soft); }
+  .dropzone .dz-title { font-weight: 600; margin-bottom: 8px; }
+  .dropzone .btns { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .dz-status { margin-top: 10px; font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 8px 12px; justify-content: center; align-items: center; }
+  .dz-status.has { color: var(--text); }
+  .dz-status .pill { background: var(--accent-soft); color: var(--accent); border-radius: 999px; padding: 2px 10px; font-weight: 600; }
+  .dz-status .note { color: var(--muted); }
+  .dz-status button.link { background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; padding: 0; text-decoration: underline; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin: 12px 0; background: var(--surface-2); }
+  .seg button { border: 0; background: transparent; color: var(--muted); padding: 7px 14px; font: inherit; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--border); }
+  .seg button.on { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+  .gh-row { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: end; }
+  .gh-row label { font-size: 11.5px; letter-spacing: .04em; color: var(--muted); font-weight: 600; display: block; margin-bottom: 4px; }
+  .gh-row input, .gh-pick select { width: 100%; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); color: var(--text); font: inherit; }
+  .gh-pick { margin-top: 10px; }
+  .run-row { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; justify-content: space-between; }
+  .run-row .check { margin-top: 0; }
+  .privacy { margin: 12px 0 0; font-size: 12.5px; }
+  @media (max-width: 560px) { .gh-row { grid-template-columns: 1fr; } }
   .usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
   .usage-grid .big { font-size: 24px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
   .usage-grid .label { font-size: 12.5px; color: var(--muted); }
@@ -217,12 +242,77 @@
     <div class="switch-row"><label class="check" style="margin:0"><input type="checkbox" id="autoreview"> Auto-review new pull requests and new commits</label><span id="autostatus"></span></div>
   </section>
 
-  <details class="card pad upload" id="uploadcard" hidden>
+  <details class="card pad upload" id="uploadcard" hidden open>
     <summary><strong>Review files or folders from your computer</strong> <span class="hint">— no pull request needed</span></summary>
-    <p class="hint">Choose the files, a whole folder or one ZIP. Add the previous version too if you only want what changed reviewed. The files are read in memory on the server and are not saved. With Claude selected the code is sent to Anthropic's API; with Ollama it stays on the computer running Ollama.</p>
-    <div class="upload-grid" id="uploadboxes"></div>
-    <label class="check"><input type="checkbox" id="upai" checked> Also ask the AI (slower; the rule checks always run)</label>
-    <div class="actions"><button class="primary" id="uprun">Review these files</button></div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-n">1</div>
+        <div>
+          <h3>Choose what to review</h3>
+          <p class="sub">Drop files or a whole folder here, or pick them. One ZIP works too.</p>
+          <div class="dropzone" id="dz-new" data-which="newer">
+            <div class="dz-title">Drop files or a folder here</div>
+            <div class="btns">
+              <button class="ghost" type="button" data-pick="newer-files">Choose files or a ZIP</button>
+              <button class="ghost" type="button" data-pick="newer-folder">Choose a folder</button>
+            </div>
+            <div class="dz-status" id="st-new">Nothing chosen yet.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-n">2</div>
+        <div>
+          <h3>Compare with an earlier version <span class="optional">(optional)</span></h3>
+          <label class="check" style="margin-top:2px"><input type="checkbox" id="upcompare"> Only review what changed since an earlier version</label>
+          <div id="upoldwrap" hidden>
+            <div class="seg" role="group" aria-label="Where is the earlier version">
+              <button type="button" id="seg-computer" class="on">From my computer</button>
+              <button type="button" id="seg-github">From a GitHub branch</button>
+            </div>
+            <div id="pane-computer">
+              <div class="dropzone" id="dz-old" data-which="older">
+                <div class="dz-title">Drop the earlier version here</div>
+                <div class="btns">
+                  <button class="ghost" type="button" data-pick="older-files">Choose files or a ZIP</button>
+                  <button class="ghost" type="button" data-pick="older-folder">Choose a folder</button>
+                </div>
+                <div class="dz-status" id="st-old">Nothing chosen yet.</div>
+              </div>
+            </div>
+            <div id="pane-github" hidden>
+              <div class="gh-row">
+                <div><label for="gh-owner">OWNER</label><input id="gh-owner" autocomplete="off" placeholder="e.g. my-company"></div>
+                <div><label for="gh-repo">REPOSITORY</label><input id="gh-repo" autocomplete="off" placeholder="e.g. my-project"></div>
+                <button class="ghost" type="button" id="gh-load">Load branches</button>
+              </div>
+              <div class="gh-pick" id="gh-pick" hidden>
+                <label class="lbl" for="gh-branch" style="display:block;font-size:11.5px;letter-spacing:.04em;color:var(--muted);font-weight:600;margin-bottom:4px">BRANCH TO COMPARE WITH</label>
+                <select id="gh-branch"></select>
+              </div>
+              <p class="hint" id="gh-note" style="margin:8px 0 0"></p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="step-n">3</div>
+        <div>
+          <h3>Start the review</h3>
+          <div class="run-row">
+            <label class="check"><input type="checkbox" id="upai" checked> Also ask the AI <span class="hint">(slower; the rule checks always run)</span></label>
+            <button class="primary" id="uprun" type="button">Review these files</button>
+          </div>
+          <p class="hint privacy">The files are read in memory on the server and are not saved. With Claude selected the code is sent to Anthropic's API; with Ollama it stays on the computer running Ollama.</p>
+        </div>
+      </div>
+    </div>
+    <input type="file" id="in-newer-files" multiple hidden>
+    <input type="file" id="in-newer-folder" webkitdirectory directory hidden>
+    <input type="file" id="in-older-files" multiple hidden>
+    <input type="file" id="in-older-folder" webkitdirectory directory hidden>
   </details>
 
   <section class="stats" id="stats" hidden aria-label="Overview"></section>
@@ -590,47 +680,99 @@
     }).then(function () { $('load').disabled = false; $('load').textContent = 'Load pull requests'; });
   }
 
-  // ---- review files, a folder or a ZIP chosen in the browser
+  // ---- review files, a folder or a ZIP chosen in the browser (the earlier version may also be a GitHub branch)
   var uploadInfo = null;
   var picks = { newer: { files: [], skipped: 0 }, older: { files: [], skipped: 0 } };
+  var oldMode = 'computer';
   var BINARY_EXT = /\.(png|jpe?g|gif|bmp|ico|webp|pdf|exe|dll|so|class|jar|war|bin|mp[34]|avi|mov|woff2?|ttf|eot|7z|rar|gz|tar|tgz|dmg|iso|pyc|obj|lib|docx?|xlsx?|pptx?)$/i;
-  var SKIP_DIR = /(^|\/)(\.git|node_modules)\//;
+  var SKIP_DIR = /(^|\/)(\.git|node_modules)(\/|$)/;
   var MAX_FILE_BYTES = 1024 * 1024; // larger files are not reviewed as text anyway
+  var MAX_DROPPED = 5000;           // stops a drop of a huge folder from reading forever
 
   function fmtBytes(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB'; }
   function pickedBytes(which) { return picks[which].files.reduce(function (n, f) { return n + f.file.size; }, 0); }
 
-  function choose(which, list) {
-    var all = Array.prototype.map.call(list, function (f) { return { path: f.webkitRelativePath || f.name, file: f }; });
-    var lone = all.length === 1 && /\.zip$/i.test(all[0].path);
-    var keep = lone ? all : all.filter(function (f) { return !SKIP_DIR.test('/' + f.path) && !BINARY_EXT.test(f.path) && f.file.size <= MAX_FILE_BYTES; });
-    picks[which] = { files: keep, skipped: all.length - keep.length };
-    renderUploadBoxes();
+  function choose(which, items) {
+    var lone = items.length === 1 && /\.zip$/i.test(items[0].path);
+    var keep = lone ? items : items.filter(function (f) { return !SKIP_DIR.test(f.path) && !BINARY_EXT.test(f.path) && f.file.size <= MAX_FILE_BYTES; });
+    picks[which] = { files: keep, skipped: items.length - keep.length };
+    renderUploadStatus();
+  }
+  function fromFileList(list) {
+    return Array.prototype.map.call(list, function (f) { return { path: f.webkitRelativePath || f.name, file: f }; });
   }
 
-  function renderUploadBoxes() {
-    var box = $('uploadboxes');
-    box.textContent = '';
-    [['newer', 'New version', 'Required. The files you want reviewed.'], ['older', 'Previous version', 'Optional. When given, only what changed is reviewed.']].forEach(function (def) {
-      var which = def[0], pick = picks[which];
-      function input(folder) {
-        var i = el('input', { type: 'file', hidden: '' });
-        if (folder) { i.setAttribute('webkitdirectory', ''); i.setAttribute('directory', ''); } else { i.multiple = true; }
-        i.addEventListener('change', function () { if (i.files && i.files.length) choose(which, i.files); i.value = ''; });
-        return i;
-      }
-      var files = input(false), folder = input(true);
-      var status = pick.files.length
-        ? pick.files.length + ' file' + (pick.files.length === 1 ? '' : 's') + ' · ' + fmtBytes(pickedBytes(which)) + (pick.skipped ? ' · ' + pick.skipped + ' skipped (binary, very large, .git or node_modules)' : '')
-        : 'Nothing chosen yet.';
-      box.appendChild(el('div', { class: 'upload-box' },
-        el('strong', { text: def[1] }), el('div', { class: 'hint', text: def[2] }),
-        el('div', { class: 'btns' },
-          el('button', { class: 'ghost', text: 'Choose files or a ZIP', on: { click: function () { files.click(); } } }),
-          el('button', { class: 'ghost', text: 'Choose a folder', on: { click: function () { folder.click(); } } }),
-          pick.files.length ? el('button', { class: 'ghost', text: 'Clear', on: { click: function () { picks[which] = { files: [], skipped: 0 }; renderUploadBoxes(); } } }) : null),
-        el('div', { class: 'hint', text: status }), files, folder));
+  // A dropped folder arrives as directory entries that have to be walked; .git and node_modules are not entered.
+  function readEntries(reader) {
+    return new Promise(function (resolve, reject) { reader.readEntries(resolve, reject); });
+  }
+  function walkEntry(entry, out) {
+    if (out.length >= MAX_DROPPED) return Promise.resolve();
+    if (entry.isFile) {
+      return new Promise(function (resolve) {
+        entry.file(function (file) { out.push({ path: entry.fullPath.replace(/^\//, ''), file: file }); resolve(); }, function () { resolve(); });
+      });
+    }
+    if (!entry.isDirectory || SKIP_DIR.test('/' + entry.fullPath.replace(/^\//, '') + '/')) return Promise.resolve();
+    var reader = entry.createReader();
+    function more() {
+      return readEntries(reader).then(function (batch) {
+        if (!batch.length) return null;
+        return batch.reduce(function (chain, child) { return chain.then(function () { return walkEntry(child, out); }); }, Promise.resolve()).then(more);
+      });
+    }
+    return more().catch(function () { /* an unreadable folder is skipped */ });
+  }
+  function itemsFromDrop(dataTransfer) {
+    var entries = [];
+    Array.prototype.forEach.call(dataTransfer.items || [], function (item) {
+      var entry = item.webkitGetAsEntry && item.webkitGetAsEntry();
+      if (entry) entries.push(entry);
     });
+    if (!entries.length) return Promise.resolve(fromFileList(dataTransfer.files || []));
+    var out = [];
+    return entries.reduce(function (chain, entry) { return chain.then(function () { return walkEntry(entry, out); }); }, Promise.resolve()).then(function () { return out; });
+  }
+
+  function renderStatus(id, which) {
+    var box = $(id), pick = picks[which];
+    box.textContent = '';
+    box.className = 'dz-status' + (pick.files.length ? ' has' : '');
+    if (!pick.files.length) { box.textContent = 'Nothing chosen yet.'; return; }
+    box.appendChild(el('span', { class: 'pill', text: pick.files.length + ' file' + (pick.files.length === 1 ? '' : 's') + ' · ' + fmtBytes(pickedBytes(which)) }));
+    if (pick.skipped) box.appendChild(el('span', { class: 'note', text: pick.skipped + ' left out (binary, very large, .git or node_modules)' }));
+    box.appendChild(el('button', { class: 'link', type: 'button', text: 'Clear', on: { click: function () { picks[which] = { files: [], skipped: 0 }; renderUploadStatus(); } } }));
+  }
+  function renderUploadStatus() { renderStatus('st-new', 'newer'); renderStatus('st-old', 'older'); }
+
+  function setOldMode(mode) {
+    oldMode = mode;
+    $('seg-computer').className = mode === 'computer' ? 'on' : '';
+    $('seg-github').className = mode === 'github' ? 'on' : '';
+    $('pane-computer').hidden = mode !== 'computer';
+    $('pane-github').hidden = mode !== 'github';
+    if (mode === 'github') {
+      if (!$('gh-owner').value) $('gh-owner').value = $('owner').value.trim();
+      if (!$('gh-repo').value) $('gh-repo').value = $('repo').value.trim();
+    }
+  }
+  function loadBranches() {
+    var owner = $('gh-owner').value.trim(), repo = $('gh-repo').value.trim();
+    if (!owner || !repo) { toast('Enter the owner and the repository first.'); return; }
+    var button = $('gh-load');
+    button.disabled = true; button.textContent = 'Loading…'; $('gh-note').textContent = '';
+    api('/api/branches?owner=' + encodeURIComponent(owner) + '&repo=' + encodeURIComponent(repo)).then(function (data) {
+      var select = $('gh-branch');
+      select.textContent = '';
+      data.branches.forEach(function (b) {
+        var o = el('option', { text: b.name + (b.isDefault ? '  (default)' : '') });
+        o.value = b.name;
+        select.appendChild(o);
+      });
+      $('gh-pick').hidden = !data.branches.length;
+      $('gh-note').textContent = data.branches.length ? data.branches.length + ' branches found. Pick the earlier version above.' : 'This repository has no branches.';
+    }).catch(function (err) { $('gh-pick').hidden = true; $('gh-note').textContent = err.message; })
+      .then(function () { button.disabled = false; button.textContent = 'Load branches'; });
   }
 
   function readBase64(file) {
@@ -652,32 +794,71 @@
   }
 
   function runUpload() {
-    if (!picks.newer.files.length) { toast('Choose the new version first.'); return; }
-    var total = pickedBytes('newer') + pickedBytes('older');
+    if (!picks.newer.files.length) { toast('Choose the files to review first (step 1).'); return; }
+    var compare = $('upcompare').checked;
+    var useGithub = compare && oldMode === 'github';
+    if (compare && !useGithub && !picks.older.files.length) { toast('Choose the earlier version, or untick "Only review what changed".'); return; }
+    if (useGithub && !($('gh-branch').value && !$('gh-pick').hidden)) { toast('Load the branches and pick one to compare with.'); return; }
+    var total = pickedBytes('newer') + (compare && !useGithub ? pickedBytes('older') : 0);
     if (uploadInfo && total > uploadInfo.maxTotalBytes) { toast('That is ' + fmtBytes(total) + ' - this server accepts up to ' + fmtBytes(uploadInfo.maxTotalBytes) + '. Choose fewer files.'); return; }
     var button = $('uprun');
     button.disabled = true; button.textContent = 'Uploading…';
-    Promise.all([encodePick(picks.newer), picks.older.files.length ? encodePick(picks.older) : Promise.resolve(null)]).then(function (parts) {
+    Promise.all([encodePick(picks.newer), compare && !useGithub ? encodePick(picks.older) : Promise.resolve(null)]).then(function (parts) {
       var body = { name: nameOf(picks.newer), useAi: $('upai').checked, newVersion: { files: parts[0] } };
       if (parts[1]) body.oldVersion = { files: parts[1] };
+      if (useGithub) body.oldVersion = { github: { owner: $('gh-owner').value.trim(), repo: $('gh-repo').value.trim(), branch: $('gh-branch').value } };
       return api('/api/local-uploads', { method: 'POST', body: body });
     }).then(function (job) {
       picks = { newer: { files: [], skipped: 0 }, older: { files: [], skipped: 0 } };
-      renderUploadBoxes();
+      renderUploadStatus();
       state.openJobId = job.id;
       return pollJobs().then(function () { $('panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
     }).catch(function (err) { toast(err.message); })
       .then(function () { button.disabled = false; button.textContent = 'Review these files'; });
   }
+
+  var uploadWired = false;
+  function wireUploads() {
+    if (uploadWired) return;
+    uploadWired = true;
+    ['newer-files', 'newer-folder', 'older-files', 'older-folder'].forEach(function (key) {
+      var input = $('in-' + key), which = key.split('-')[0];
+      input.addEventListener('change', function () { if (input.files && input.files.length) choose(which, fromFileList(input.files)); input.value = ''; });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-pick]'), function (b) {
+      b.addEventListener('click', function () { $('in-' + b.getAttribute('data-pick')).click(); });
+    });
+    ['dz-new', 'dz-old'].forEach(function (id) {
+      var zone = $(id), which = zone.getAttribute('data-which');
+      ['dragenter', 'dragover'].forEach(function (ev) { zone.addEventListener(ev, function (e) { e.preventDefault(); zone.classList.add('over'); }); });
+      zone.addEventListener('dragleave', function (e) { if (e.target === zone) zone.classList.remove('over'); });
+      zone.addEventListener('drop', function (e) {
+        e.preventDefault(); zone.classList.remove('over');
+        itemsFromDrop(e.dataTransfer).then(function (items) { if (items.length) choose(which, items); else toast('Nothing usable was dropped.'); });
+      });
+    });
+    $('upcompare').addEventListener('change', function () { $('upoldwrap').hidden = !this.checked; });
+    $('seg-computer').addEventListener('click', function () { setOldMode('computer'); });
+    $('seg-github').addEventListener('click', function () {
+      setOldMode('github');
+      if (uploadInfo && uploadInfo.branches && $('gh-pick').hidden && $('gh-owner').value && $('gh-repo').value) loadBranches();
+    });
+    $('gh-load').addEventListener('click', loadBranches);
+    $('uprun').addEventListener('click', runUpload);
+  }
   function loadUploads() {
     return api('/api/uploads').then(function (info) {
       uploadInfo = info;
       $('uploadcard').hidden = !info.available;
-      if (info.available) renderUploadBoxes();
+      if (!info.available) return;
+      wireUploads();
+      // Choosing a GitHub branch only makes sense when the server can reach GitHub.
+      $('seg-github').hidden = !info.branches;
+      if (!info.branches && oldMode === 'github') setOldMode('computer');
+      renderUploadStatus();
     }).catch(function () { $('uploadcard').hidden = true; });
   }
 
-  // ---- reviews
   // force = the person asked for a new review of a commit that was already reviewed (it uses the AI again).
   function startReview(pr, force) {
     api('/api/jobs', { method: 'POST', body: { owner: state.loaded.owner, repo: state.loaded.repo, pr: pr.number, headSha: pr.headSha, force: force === true, autoPost: $('autopost').checked } })
@@ -960,7 +1141,6 @@
     refreshStatus(); loadAuto(); loadRules(); loadAccuracy(); loadUploads();
     if (started) { pollJobs(); return; }
     started = true;
-    $('uprun').addEventListener('click', runUpload);
     $('owner').value = store.get('owner');
     $('repo').value = store.get('repo');
     setInterval(function () { if (!$('app').hidden) { refreshStatus(); loadAuto(); } }, 15000);
