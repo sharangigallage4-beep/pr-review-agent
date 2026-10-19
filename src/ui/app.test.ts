@@ -833,3 +833,47 @@ describe('review UI app: comparing with a GitHub branch', () => {
     }
   });
 });
+
+describe('review UI app: deep review option', () => {
+  test('is passed on to the review, and a normal review is not reused for it', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'ui-deep-'));
+    writeFileSync(path.join(dir, 'index.html'), 'x');
+    const flags: Array<boolean | undefined> = [];
+    const jobs = new JobManager({
+      echo: silent,
+      runReview: (async (_o: string, _r: string, _n: number, overrides: { deepReview?: boolean; confirmBeforePosting?: (p: unknown) => unknown }) => {
+        flags.push(overrides.deepReview);
+        await overrides.confirmBeforePosting?.({ owner: 'o', repo: 'r', pullRequestNumber: 1, summary: 's', inlineFindings: [], summaryOnlyFindings: [] });
+        return { status: 'posted', reviewId: 1, reviewUrl: 'u', newCommentCount: 0, summaryOnlyCount: 0, totalFindings: 0 };
+      }) as never,
+    });
+    const server = buildUiApp({
+      jobs,
+      publicDir: dir,
+      listPullRequests: async () => [],
+      getStatus: async () => ({ github: { configured: true }, model: { kind: 'anthropic' } }),
+    }).listen(0, '127.0.0.1');
+    await new Promise((r) => server.once('listening', r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const post = (body: unknown) => fetch(`${base}/api/jobs`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const sha = 'abc1234def5678abc1234def5678abc1234def56';
+    const done = async (id: string) => {
+      for (let i = 0; i < 50 && jobs.get(id)?.status !== 'posted'; i += 1) await new Promise((r) => setTimeout(r, 40));
+    };
+    try {
+      const normal = (await (await post({ owner: 'o', repo: 'r', pr: 1, headSha: sha, autoPost: true })).json()) as { id: string };
+      await done(normal.id);
+      const deepRes = await post({ owner: 'o', repo: 'r', pr: 1, headSha: sha, deep: true, autoPost: true });
+      assert.equal(deepRes.status, 202, 'not answered from the normal review');
+      const deep = (await deepRes.json()) as { id: string; deep: boolean };
+      assert.equal(deep.deep, true);
+      await done(deep.id);
+      assert.deepEqual(flags, [undefined, true]);
+      const normalAgain = await post({ owner: 'o', repo: 'r', pr: 1, headSha: sha, autoPost: true });
+      assert.equal(normalAgain.status, 200, 'the deep review answers a normal request');
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

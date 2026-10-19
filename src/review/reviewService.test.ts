@@ -165,3 +165,23 @@ describe('normalizeRawReviewResult', () => {
     assert.deepEqual(normalizeRawReviewResult(raw), raw);
   });
 });
+
+describe('reviewPullRequest and the deep-review file reader', () => {
+  const input = {
+    pullRequest: { repository: 'a/b', number: 1, title: 't', description: '', author: null, baseRef: 'main', headRef: 'x' },
+    diff: '',
+    changedFiles: [],
+  };
+
+  test('hands the file reader to the model call when the input has one, and leaves it out otherwise', async () => {
+    const seen: Array<unknown> = [];
+    const requestReview = async (params: { readFile?: unknown }) => {
+      seen.push(params.readFile);
+      return { summary: 'ok', issues: [] };
+    };
+    const readFile = async () => 'x';
+    await reviewPullRequest({ ...input, readFile }, { requestReview, conventions: '' });
+    await reviewPullRequest(input, { requestReview, conventions: '' });
+    assert.deepEqual(seen, [readFile, undefined]);
+  });
+});

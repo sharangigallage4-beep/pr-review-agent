@@ -34,6 +34,11 @@ export interface ReviewInput {
   changedFiles: ReviewChangedFile[];
   /** Full contents of files worth showing beyond their diff hunks (e.g. for cross-function context). */
   fileContents?: ReviewFileContent[];
+  /**
+   * Makes this a deep review: lets the model look at other files of the repository (as of the PR's head commit)
+   * before it answers. Returns undefined for a file that does not exist. Only used with Claude.
+   */
+  readFile?: (path: string) => Promise<string | undefined>;
 }
 
 // --- Output schema - exactly the shape Claude must return ---

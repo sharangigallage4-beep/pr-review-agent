@@ -73,6 +73,11 @@ export interface ReviewPullRequestDeps {
   /** The bot's own login for dedup filtering - defaults to PR_REVIEW_BOT_LOGIN via loadConfig(). */
   knownBotLogin?: string;
   /**
+   * A deep review: the model may read other files of the repository (at the PR's head commit) before it answers.
+   * Slower and uses more tokens, so it is off unless asked for.
+   */
+  deepReview?: boolean;
+  /**
    * Called with the fully-prepared review immediately before the one write call to GitHub.
    * Returning false (or a rejected/false-resolving promise) cancels: nothing is posted, and the
    * function returns `{ status: 'cancelled', ... }` instead. Defaults to always confirming, so
@@ -225,7 +230,20 @@ export async function reviewPullRequest(
         deletions: f.deletions,
         patch: f.patch,
       })),
+      ...(deps.deepReview
+        ? {
+            readFile: async (path: string): Promise<string | undefined> => {
+              try {
+                const result = await deps.getFileContent({ owner: ref.owner, repo: ref.repo, path, ref: pr.head.sha });
+                return 'content' in result && typeof result.content === 'string' ? result.content : undefined;
+              } catch {
+                return undefined;
+              }
+            },
+          }
+        : {}),
     };
+    if (deps.deepReview) log.info('Deep review: the AI may read other files of the repository');
 
     let claudeResult;
     try {

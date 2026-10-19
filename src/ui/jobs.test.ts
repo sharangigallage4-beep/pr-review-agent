@@ -438,3 +438,43 @@ describe('JobManager: the same commit is not reviewed twice', () => {
     assert.notEqual(second.id, first.id);
   });
 });
+
+describe('JobManager deep reviews', () => {
+  const SHA = 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2';
+  const make = () => {
+    const deepFlags: Array<boolean | undefined> = [];
+    const jobs = new JobManager({
+      echo: silent,
+      runReview: (async (_o: string, _r: string, _n: number, overrides: { deepReview?: boolean; confirmBeforePosting?: (p: unknown) => unknown }) => {
+        deepFlags.push(overrides.deepReview);
+        await overrides.confirmBeforePosting?.({ owner: 'acme', repo: 'w', pullRequestNumber: 1, summary: 's', inlineFindings: [], summaryOnlyFindings: [] });
+        return { status: 'posted', reviewId: 1, reviewUrl: 'u', newCommentCount: 0, summaryOnlyCount: 0, totalFindings: 0 };
+      }) as never,
+    });
+    return { jobs, deepFlags };
+  };
+
+  test('the deep option is kept on the job and passed to the workflow', async () => {
+    const { jobs, deepFlags } = make();
+    const deep = jobs.start('acme', 'w', 1, true, undefined, { headSha: SHA, deep: true });
+    await waitFor(deep, (j) => j.status === 'posted');
+    const normal = jobs.start('acme', 'w', 2, true, undefined, { headSha: SHA });
+    await waitFor(normal, (j) => j.status === 'posted');
+    assert.deepEqual([deep.deep, normal.deep], [true, undefined]);
+    assert.deepEqual(deepFlags, [true, undefined]);
+  });
+
+  test('a normal review is not reused for a deep request, but a deep one answers a normal request', async () => {
+    const { jobs, deepFlags } = make();
+    const normal = jobs.start('acme', 'w', 1, true, undefined, { headSha: SHA });
+    await waitFor(normal, (j) => j.status === 'posted');
+
+    const deep = jobs.start('acme', 'w', 1, true, undefined, { headSha: SHA, deep: true });
+    assert.notEqual(deep.id, normal.id, 'a deep review was asked for, a normal one is not it');
+    await waitFor(deep, (j) => j.status === 'posted');
+
+    const again = jobs.start('acme', 'w', 1, true, undefined, { headSha: SHA });
+    assert.equal(again.id, deep.id, 'the deep review (the newest) already answers a normal request');
+    assert.equal(deepFlags.length, 2);
+  });
+});

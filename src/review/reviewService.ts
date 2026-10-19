@@ -6,7 +6,7 @@ import type { ReviewInput, ReviewResult } from './types.js';
 
 export interface ReviewServiceDeps {
   /** Injectable for tests - defaults to the real Claude API call in claudeClient.ts. */
-  requestReview?: (params: { systemPrompt: string; userMessage: string }) => Promise<unknown>;
+  requestReview?: (params: { systemPrompt: string; userMessage: string; readFile?: (path: string) => Promise<string | undefined> }) => Promise<unknown>;
   /** Team coding conventions text. Defaults to the .md files in docs/conventions; pass '' to disable. */
   conventions?: string;
 }
@@ -47,7 +47,7 @@ export async function reviewPullRequest(input: ReviewInput, deps: ReviewServiceD
   const requestReview = deps.requestReview ?? defaultRequestReview;
 
   const attempt = async () => {
-    const raw = await requestReview({ systemPrompt, userMessage });
+    const raw = await requestReview({ systemPrompt, userMessage, ...(input.readFile ? { readFile: input.readFile } : {}) });
     return reviewResultSchema.safeParse(normalizeRawReviewResult(raw));
   };
 

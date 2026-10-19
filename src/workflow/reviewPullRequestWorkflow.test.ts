@@ -898,3 +898,39 @@ describe('reviewPullRequest survives a short GitHub outage', () => {
   });
 });
 
+describe('reviewPullRequest deep review', () => {
+  const makeDeps = (deep: boolean | undefined, seen: { readFile?: (p: string) => Promise<string | undefined> }, fetched: Array<{ path: string; ref: string }>) =>
+    baseDeps({
+      deepReview: deep,
+      runClaudeReview: async (input) => {
+        seen.readFile = input.readFile;
+        return { summary: 'ok', issues: [] };
+      },
+      getFileContent: async ({ path, ref }) => {
+        fetched.push({ path, ref: ref ?? '' });
+        if (path === 'missing.ts') throw new Error('404');
+        return { path, ref: ref ?? '', sha: 's', size: 3, content: 'abc' };
+      },
+    });
+
+  test('gives the model a file reader that reads at the PR head commit', async () => {
+    const seen: { readFile?: (p: string) => Promise<string | undefined> } = {};
+    const fetched: Array<{ path: string; ref: string }> = [];
+    await reviewPullRequest('acme', 'widgets', 42, makeDeps(true, seen, fetched));
+    assert.equal(typeof seen.readFile, 'function');
+    assert.equal(await seen.readFile?.('src/other.ts'), 'abc');
+    assert.deepEqual(fetched.at(-1), { path: 'src/other.ts', ref: 'head-sha' });
+  });
+
+  test('a file that cannot be fetched is simply "not there" for the model, never an error', async () => {
+    const seen: { readFile?: (p: string) => Promise<string | undefined> } = {};
+    await reviewPullRequest('acme', 'widgets', 42, makeDeps(true, seen, []));
+    assert.equal(await seen.readFile?.('missing.ts'), undefined);
+  });
+
+  test('without the deep option the model gets no file reader', async () => {
+    const seen: { readFile?: (p: string) => Promise<string | undefined> } = { readFile: async () => 'unset' };
+    await reviewPullRequest('acme', 'widgets', 42, makeDeps(undefined, seen, []));
+    assert.equal(seen.readFile, undefined);
+  });
+});

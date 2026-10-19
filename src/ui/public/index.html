@@ -239,6 +239,7 @@
       <button class="primary" id="load">Load pull requests</button>
     </div>
     <label class="check"><input type="checkbox" id="autopost"> Post comments to GitHub automatically (skip the preview)</label>
+    <label class="check"><input type="checkbox" id="deep"> Deep review <span class="hint">— the AI may read other files of the repository before it answers (Claude only; slower, uses more tokens)</span></label>
     <div class="switch-row"><label class="check" style="margin:0"><input type="checkbox" id="autoreview"> Auto-review new pull requests and new commits</label><span id="autostatus"></span></div>
   </section>
 
@@ -577,7 +578,7 @@
     if (!todo.length || !window.confirm('Start ' + todo.length + ' reviews? They run one after another, and each can take a few minutes on a local model.')) return;
     var post = $('autopost').checked;
     todo.reduce(function (chain, pr) {
-      return chain.then(function () { return api('/api/jobs', { method: 'POST', body: { owner: state.loaded.owner, repo: state.loaded.repo, pr: pr.number, headSha: pr.headSha, autoPost: post } }); });
+      return chain.then(function () { return api('/api/jobs', { method: 'POST', body: { owner: state.loaded.owner, repo: state.loaded.repo, pr: pr.number, headSha: pr.headSha, deep: $('deep').checked, autoPost: post } }); });
     }, Promise.resolve()).then(function () { toast(todo.length + ' reviews queued.'); return pollJobs(); }).catch(function (err) { toast(err.message); pollJobs(); });
   }
 
@@ -862,7 +863,7 @@
 
   // force = the person asked for a new review of a commit that was already reviewed (it uses the AI again).
   function startReview(pr, force) {
-    api('/api/jobs', { method: 'POST', body: { owner: state.loaded.owner, repo: state.loaded.repo, pr: pr.number, headSha: pr.headSha, force: force === true, autoPost: $('autopost').checked } })
+    api('/api/jobs', { method: 'POST', body: { owner: state.loaded.owner, repo: state.loaded.repo, pr: pr.number, headSha: pr.headSha, force: force === true, deep: $('deep').checked, autoPost: $('autopost').checked } })
       .then(function (job) {
         if (job.reused) toast('This commit was already reviewed - showing that result. No tokens were used.');
         state.openJobId = job.id; return pollJobs().then(function () { $('panel').scrollIntoView({ behavior: 'smooth', block: 'start' }); });
@@ -943,7 +944,7 @@
     panel.hidden = false;
     panel.textContent = '';
     panel.appendChild(el('div', { class: 'panel-head' },
-      el('span', { class: 'panel-title', text: (job.kind === 'local' ? 'Local review · ' + job.label : job.owner + '/' + job.repo + ' · PR #' + job.pr) + (job.provider ? ' · ' + (job.provider === 'claude' ? 'Claude' : 'Ollama') : '') }),
+      el('span', { class: 'panel-title', text: (job.kind === 'local' ? 'Local review · ' + job.label : job.owner + '/' + job.repo + ' · PR #' + job.pr) + (job.provider ? ' · ' + (job.provider === 'claude' ? 'Claude' : 'Ollama') : '') + (job.deep ? ' · deep' : '') }),
       el('span', { class: 'badge ' + job.status, text: STATUS_TEXT[job.status] })));
     if (job.usage) {
       var entry = state.usage && state.usage.recent ? state.usage.recent.filter(function (r) { return r.id === job.id; })[0] : null;

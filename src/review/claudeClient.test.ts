@@ -233,3 +233,66 @@ describe('prompt caching of the fixed instructions and team rules', () => {
     assert.equal(system, 'system');
   });
 });
+
+describe('deep review (reading other files) through requestReview', () => {
+  const claude = { id: 'claude' as const, apiKey: 'k', baseURL: 'https://api.anthropic.com', model: 'claude-sonnet-5-5' };
+  const ollama = { id: 'ollama' as const, apiKey: 'ollama', baseURL: 'http://localhost:11434', model: 'q' };
+  const submitted = { summary: 'deep', issues: [] };
+  const withUsage = (message: object, input: number, output: number) => ({ ...message, usage: { input_tokens: input, output_tokens: output } });
+
+  /** Claude asks for one file, then submits. */
+  function twoStep() {
+    const seen: Array<{ tools: string[]; system: unknown }> = [];
+    let turn = 0;
+    const client = fakeClient(async (params) => {
+      const p = params as { tools: Array<{ name: string }>; system: unknown };
+      seen.push({ tools: p.tools.map((t) => t.name), system: p.system });
+      turn += 1;
+      return turn === 1
+        ? withUsage({ stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'a', name: 'read_file', input: { path: 'src/x.ts' } }] }, 100, 10)
+        : withUsage({ stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 'b', name: 'submit_review', input: submitted }] }, 150, 40);
+    });
+    return { client, seen };
+  }
+
+  test('with Claude and a file reader the model can read files, and the review comes from the loop', async () => {
+    const { client, seen } = twoStep();
+    const read: string[] = [];
+    const out = await requestReview({ ...baseParams, provider: claude, readFile: async (p) => (read.push(p), 'code') }, client);
+    assert.deepEqual(out, submitted);
+    assert.deepEqual(read, ['src/x.ts']);
+    assert.deepEqual(seen[0]?.tools, ['read_file', 'submit_review']);
+    assert.match(JSON.stringify(seen[0]?.system), /DEEP REVIEW/);
+  });
+
+  test('every request of the loop is counted in the usage', async () => {
+    const { client } = twoStep();
+    const used: Array<{ inputTokens: number; outputTokens: number }> = [];
+    await requestReview({ ...baseParams, provider: claude, readFile: async () => 'code', onUsage: (u) => used.push(u) }, client);
+    assert.deepEqual(used.map((u) => [u.inputTokens, u.outputTokens]), [[100, 10], [150, 40]]);
+  });
+
+  test('Ollama ignores the file reader: one normal request, no extra tool, no deep-review text', async () => {
+    const seen: Array<{ tools: string[]; system: unknown }> = [];
+    const client = fakeClient(async (params) => {
+      const p = params as { tools: Array<{ name: string }>; system: unknown };
+      seen.push({ tools: p.tools.map((t) => t.name), system: p.system });
+      return { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'submit_review', input: submitted }] };
+    });
+    let reads = 0;
+    const out = await requestReview({ ...baseParams, provider: ollama, readFile: async () => (reads += 1, 'x') }, client);
+    assert.deepEqual(out, submitted);
+    assert.deepEqual([seen.length, seen[0]?.tools, reads], [1, ['submit_review'], 0]);
+    assert.equal(seen[0]?.system, 'system');
+  });
+
+  test('without a file reader nothing changes for Claude: one request with only submit_review', async () => {
+    const seen: string[][] = [];
+    const client = fakeClient(async (params) => {
+      seen.push((params as { tools: Array<{ name: string }> }).tools.map((t) => t.name));
+      return { stop_reason: 'tool_use', content: [{ type: 'tool_use', name: 'submit_review', input: submitted }] };
+    });
+    await requestReview({ ...baseParams, provider: claude }, client);
+    assert.deepEqual(seen, [['submit_review']]);
+  });
+});

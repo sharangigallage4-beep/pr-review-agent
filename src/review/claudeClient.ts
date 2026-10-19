@@ -1,3 +1,4 @@
+import { DEFAULT_AGENT_LIMITS, agentPromptAddendum, runAgent, type ReadFile } from './agent.js';
 import Anthropic from '@anthropic-ai/sdk';
 import { loadReviewConfig } from './config.js';
 import type { ResolvedProvider } from './providers.js';
@@ -96,6 +97,13 @@ export interface RequestReviewParams {
   /** Which server and model to ask (Claude or Ollama). When given it replaces `model` and the environment. */
   provider?: ResolvedProvider;
   maxTokens?: number;
+  /**
+   * When given (and the model is Claude), this is a deep review: the model may read other files of the repository
+   * through this function before it submits its findings (see agent.ts). Ignored for any other model.
+   */
+  readFile?: ReadFile;
+  /** Plain-language progress for the job log (used by the deep review). */
+  onProgress?: (message: string) => void;
   /** Told how many tokens each response used, so the UI can show what a review cost. */
   onUsage?: (usage: { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; model: string }) => void;
 }
@@ -112,20 +120,28 @@ export interface RequestReviewParams {
  * about five minutes) is charged for those tokens at a fraction of the normal price instead of in full. Only for
  * Claude itself - an Ollama server has no such cache. CLAUDE_PROMPT_CACHE=off turns it off.
  */
-export function promptCachingOn(provider: ResolvedProvider | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
-  if ((env.CLAUDE_PROMPT_CACHE ?? '').trim().toLowerCase() === 'off') return false;
+/** True when the requests go to Claude itself (not to an Ollama server). */
+export function talksToClaude(provider: ResolvedProvider | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
   if (provider) return provider.id === 'claude';
   return !(env.ANTHROPIC_BASE_URL ?? '').trim();
 }
 
+export function promptCachingOn(provider: ResolvedProvider | undefined, env: NodeJS.ProcessEnv = process.env): boolean {
+  if ((env.CLAUDE_PROMPT_CACHE ?? '').trim().toLowerCase() === 'off') return false;
+  return talksToClaude(provider, env);
+}
+
 export async function requestReview(
-  { systemPrompt, userMessage, model, maxTokens, provider, onUsage }: RequestReviewParams,
+  { systemPrompt, userMessage, model, maxTokens, provider, onUsage, readFile, onProgress }: RequestReviewParams,
   injectedClient?: Anthropic
 ): Promise<unknown> {
   const client = injectedClient ?? (provider ? clientFor(provider) : getAnthropicClient());
   const resolvedModel = provider?.model ?? model ?? loadReviewConfig().model;
 
-  const createMessage = (toolChoice: Anthropic.ToolChoice) => client.messages.create({
+  const deep = readFile !== undefined && talksToClaude(provider);
+  const system = deep ? systemPrompt + agentPromptAddendum(DEFAULT_AGENT_LIMITS) : systemPrompt;
+
+  const createMessage = (messages: Anthropic.MessageParam[], tools: Anthropic.Tool[], toolChoice: Anthropic.ToolChoice) => client.messages.create({
     model: resolvedModel,
     // 8000 was too low for real-world PRs: a large diff (many files, many genuine findings, each
     // needing an explanation and a suggested fix) can need more room than that to complete the
@@ -136,41 +152,60 @@ export async function requestReview(
     // non-streaming request (stays comfortably under SDK HTTP timeouts).
     max_tokens: maxTokens ?? 16000,
     system: promptCachingOn(provider)
-      ? [{ type: 'text' as const, text: systemPrompt, cache_control: { type: 'ephemeral' as const } }]
-      : systemPrompt,
-    messages: [{ role: 'user', content: userMessage }],
-    tools: [buildReviewTool()],
+      ? [{ type: 'text' as const, text: system, cache_control: { type: 'ephemeral' as const } }]
+      : system,
+    messages,
+    tools,
     tool_choice: toolChoice,
   });
+
+  // Counted for every response, before any check: a response that is cut off or unusable still used (and cost) tokens.
+  const countUsage = (response: Anthropic.Message): void => {
+    const used = response.usage;
+    if (used && onUsage) {
+      onUsage({
+        // Counted apart: tokens read from the cache cost a fraction, tokens written to it a little extra.
+        inputTokens: used.input_tokens ?? 0,
+        outputTokens: used.output_tokens ?? 0,
+        cacheReadTokens: used.cache_read_input_tokens ?? 0,
+        cacheWriteTokens: used.cache_creation_input_tokens ?? 0,
+        model: resolvedModel,
+      });
+    }
+  };
 
   // Force the submit_review call where the model allows it. Where it does not, fall back to automatic
   // tool choice: the system prompt already requires the call, and a text answer in the same shape is
   // still accepted below.
-  let response: Anthropic.Message;
-  if (modelsWithoutForcedToolChoice.has(resolvedModel)) {
-    response = await createMessage({ type: 'auto' });
-  } else {
-    try {
-      response = await createMessage({ type: 'tool', name: REVIEW_TOOL_NAME });
-    } catch (err) {
-      if (!isForcedToolChoiceRejected(err)) throw err;
-      modelsWithoutForcedToolChoice.add(resolvedModel);
-      response = await createMessage({ type: 'auto' });
+  const send = async (messages: Anthropic.MessageParam[], tools: Anthropic.Tool[], toolChoice: Anthropic.ToolChoice): Promise<Anthropic.Message> => {
+    let result: Anthropic.Message;
+    if (toolChoice.type !== 'tool' || modelsWithoutForcedToolChoice.has(resolvedModel)) {
+      result = await createMessage(messages, tools, toolChoice.type === 'tool' ? { type: 'auto' } : toolChoice);
+    } else {
+      try {
+        result = await createMessage(messages, tools, toolChoice);
+      } catch (err) {
+        if (!isForcedToolChoiceRejected(err)) throw err;
+        modelsWithoutForcedToolChoice.add(resolvedModel);
+        result = await createMessage(messages, tools, { type: 'auto' });
+      }
     }
-  }
+    countUsage(result);
+    return result;
+  };
 
-  // Counted before any check below: a response that is cut off or unusable still used (and cost) tokens.
-  const used = response.usage;
-  if (used && onUsage) {
-    onUsage({
-      // Counted apart: tokens read from the cache cost a fraction, tokens written to it a little extra.
-      inputTokens: used.input_tokens ?? 0,
-      outputTokens: used.output_tokens ?? 0,
-      cacheReadTokens: used.cache_read_input_tokens ?? 0,
-      cacheWriteTokens: used.cache_creation_input_tokens ?? 0,
-      model: resolvedModel,
+  if (deep) {
+    return runAgent({
+      send,
+      userMessage,
+      reviewTool: buildReviewTool(),
+      reviewToolName: REVIEW_TOOL_NAME,
+      readFile,
+      log: onProgress,
     });
   }
+
+  const response = await send([{ role: 'user', content: userMessage }], [buildReviewTool()], { type: 'tool', name: REVIEW_TOOL_NAME });
 
   // Fail fast with a clear, specific diagnosis rather than letting a truncated tool call fall
   // through to a generic "missing required field" schema error downstream - stop_reason tells us
