@@ -461,7 +461,7 @@
   function fmtUsd(n) { return '$' + (n < 0.1 ? n.toFixed(3) : n.toFixed(2)); }
   function usageChipNode() {
     var u = state.usage;
-    if (!u || !u.available || (!u.reviews && u.percentUsed === undefined)) return null;
+    if (!u || !u.available) return null;
     var text = 'Claude ' + u.month + ': ' + fmtTokens(u.totalTokens) + ' tokens' + (u.costUsd !== undefined ? ' ≈ ' + fmtUsd(u.costUsd) : '');
     if (u.percentUsed !== undefined) text += ' · ' + u.percentUsed + '% of limit';
     var lines = [u.reviews + ' review(s) this month: ' + (u.inputTokens + u.cacheWriteTokens).toLocaleString() + ' tokens in, ' + u.outputTokens.toLocaleString() + ' tokens out' + (u.cacheReadTokens ? ', and ' + u.cacheReadTokens.toLocaleString() + ' input tokens served from the cache at a fraction of the price.' : '.')];
